@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8
+pyftpdlib>=1.5.9
+pyopenssl>=24
