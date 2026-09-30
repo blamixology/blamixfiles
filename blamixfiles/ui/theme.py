@@ -134,6 +134,9 @@ QProgressBar::chunk {{ background: {C['accent']}; border-radius: 3px; }}
 QCheckBox, QRadioButton {{ spacing: 8px; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; }}
 QCheckBox::indicator {{ border: 1px solid {C['faint']}; border-radius: 5px; background: {C['surface']}; }}
+QTreeWidget::indicator {{ width: 15px; height: 15px; border: 1px solid {C['faint']}; border-radius: 4px;
+  background: {C['surface']}; }}
+QTreeWidget::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; image: url(__ASSETS__/check.svg); }}
 QCheckBox::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; image: url(__ASSETS__/check.svg); }}
 QRadioButton::indicator {{ border: 1px solid {C['faint']}; border-radius: 8px; background: {C['surface']}; }}
 QRadioButton::indicator {{ border-radius: 9px; }}
@@ -195,6 +198,7 @@ _ICONS = {
     "tunnel": '<path d="M4 8h13M13 4l4 4-4 4M20 16H7M11 12l-4 4 4 4"/>',
     "shield": '<path d="M12 3l7 3v5.5c0 4.5-3 7.8-7 9.5-4-1.7-7-5-7-9.5V6z"/><path d="M9 12l2 2 4-4"/>',
     "save": '<path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
+    "sync": '<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5"/><path d="M10 10l-2 2 2 2M14 10l2 2-2 2"/>',
     "gauge": '<path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-4"/><circle cx="12" cy="13.5" r="1.2"/>',
     "pause": '<path d="M9 5v14M15 5v14"/>',
     "play": '<path d="M7 5l12 7-12 7z"/>',

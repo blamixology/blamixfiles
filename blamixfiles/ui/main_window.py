@@ -69,8 +69,14 @@ class SiteTab(QWidget):
         down.setIcon(icon("arrow-left", C["accent"]))
         down.setToolTip("Download selected")
         down.clicked.connect(self.remote.send_selected)
+        sync = QToolButton()
+        sync.setIcon(icon("sync", C["accent"]))
+        sync.setToolTip("Compare && sync these two folders (Ctrl+Shift+S)")
+        sync.clicked.connect(lambda: win.open_sync(self))
         ml.addWidget(up)
         ml.addWidget(down)
+        ml.addSpacing(14)
+        ml.addWidget(sync)
         ml.addStretch(1)
 
         split = QSplitter(Qt.Horizontal)
@@ -271,6 +277,8 @@ class MainWindow(QMainWindow):
         f.addSeparator()
         act(f, "Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         act(f, "Quit", self.close, "Ctrl+Q")
+        self.sync_menu = mb.addMenu("&Sync")
+        self.reload_profiles()
         v = mb.addMenu("&View")
         act(v, "Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "Ctrl+J")
         h = mb.addMenu("&Help")
@@ -279,6 +287,51 @@ class MainWindow(QMainWindow):
         act(h, "☕ Buy me a coffee", lambda: webbrowser.open(KOFI), None, "coffee")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    # ------------------------------------------------------------ sync
+    def reload_profiles(self) -> None:
+        m = self.sync_menu
+        m.clear()
+        a = m.addAction(icon("sync"), "Compare && sync current tab…", lambda: self.open_sync())
+        a.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        profiles = self.store.sync_profiles
+        if profiles:
+            m.addSeparator()
+            for p in profiles:
+                site = self.store.sites.get(p["site_id"])
+                label = f"{p['name']}   ({site.label if site else 'site deleted'})"
+                act = m.addAction(icon("star"), label, lambda p=p: self.run_profile(p))
+                act.setEnabled(site is not None)
+            m.addSeparator()
+            dm = m.addMenu(icon("trash"), "Delete profile")
+            for p in profiles:
+                dm.addAction(p["name"], lambda p=p: self._delete_profile(p["name"]))
+
+    def _delete_profile(self, name: str) -> None:
+        if QMessageBox.question(self, "Delete profile", f"Delete the sync profile “{name}”?") == QMessageBox.Yes:
+            self.store.delete_profile(name)
+            self.reload_profiles()
+
+    def open_sync(self, tab=None, profile=None, auto: bool = False) -> None:
+        from .sync_dialog import SyncDialog
+        tab = tab or self.tabs.currentWidget()
+        if not isinstance(tab, SiteTab):
+            self.show_message("Open a site first: sync compares the two folders of a site tab.", True)
+            return
+        SyncDialog(self, tab, profile, auto_compare=auto).exec()
+
+    def run_profile(self, p: dict) -> None:
+        from ..core.sync import SyncProfile
+        prof = SyncProfile.from_dict(p)
+        site = self.store.sites.get(prof.site_id)
+        if site is None:
+            return
+        tab = next((t for t in self.site_tabs() if t.remote_session.site.id == site.id), None)
+        if tab is None:
+            self.open_site(site, prof.remote_dir)
+            tab = self.site_tabs()[-1]
+        self.tabs.setCurrentWidget(tab)
+        self.open_sync(tab, prof, auto=True)
 
     # ------------------------------------------------------------ sites
     def reload_sites(self, *_a) -> None:
@@ -354,6 +407,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "Delete site", f"Delete “{s.label}” from your vault?") == QMessageBox.Yes:
             self.store.delete(s.id)
             self.reload_sites()
+            self.reload_profiles()
 
     def site_changed(self, site: Site) -> None:
         """A session learned something worth keeping (a pinned certificate)."""

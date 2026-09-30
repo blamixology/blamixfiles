@@ -14,7 +14,8 @@ the server, and an **encrypted password vault**. Windows, macOS and Linux, plus 
 | Saved passwords | base64 in `sitemanager.xml` unless you set a master password | Always encrypted (AES-256-GCM, scrypt) |
 | Installer | has shipped bundled offers | Clean portable zip, no bundles, no telemetry |
 | Editing a remote file | download → external editor → confirm re-upload | Opens in a tab with syntax highlighting; **Ctrl+S** saves to the server |
-| Scripting | no scripted transfers | `blamixfiles get/put/ls` with saved sites |
+| Folder sync | highlights differences; no one-click sync | Compare → preview every change → apply; saved sync profiles |
+| Scripting | no scripted transfers | `blamixfiles get/put/ls/sync` with saved sites |
 
 Also: saves from the editor go to a temp file that is then renamed over the original (no
 half-written configs if the connection drops), keep permissions, line endings and encoding,
@@ -26,6 +27,10 @@ code once; transfers reuse that login.
 - **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), FTP, FTPS explicit and implicit
 - **Dual-pane browser:** drag & drop between panes and from Explorer/Finder, filter, sort, rename, delete, new folder, permissions (chmod), copy path
 - **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
+- **Compare & sync:** pick two folders, see every change before it happens (upload, download,
+  create, delete, conflicts), untick what you don't want, apply. One-way or both ways; mirror
+  mode deletes extras only when you ask for it. Save it as a profile and run it again from the
+  Sync menu or `blamixfiles sync "Deploy web"`
 - **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers, find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
 - **Site manager:** groups, colors, **production flag** (red tab + extra confirmation before deleting)
 - **Import from FileZilla** (File → Import, or `blamixfiles import filezilla`)
@@ -48,6 +53,8 @@ blamixfiles sites
 blamixfiles ls   mysite:/var/www
 blamixfiles get  mysite:/var/log/nginx ./logs
 blamixfiles put  ./dist sftp://deploy@example.com/var/www --if-exists newer
+blamixfiles sync ./dist mysite:/var/www --mirror --dry-run     # preview, then drop --dry-run
+blamixfiles sync "Deploy web" --yes                             # a profile saved in the app
 blamixfiles import filezilla
 ```
 

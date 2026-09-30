@@ -170,3 +170,58 @@ def test_saved_queue_offered_on_start_and_speed_menu(app, tmp_path, monkeypatch)
                 t.close()
             win.engine.shutdown()
             win.hide()
+
+
+def test_sync_dialog_preview_apply_and_profile(app, window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from blamixfiles.ui.sync_dialog import SyncDialog
+    root = tmp_path / "srv"
+    (root / "www").mkdir(parents=True)
+    (root / "www" / "stale.html").write_text("old")
+    local = tmp_path / "site"
+    (local / "css").mkdir(parents=True)
+    (local / "index.html").write_text("<h1>new</h1>")
+    (local / "css" / "app.css").write_text("body{}")
+    with SFTPTestServer(root) as srv:
+        site = Site(name="web", protocol="sftp", host="127.0.0.1", port=srv.port,
+                    username=USER, password=PASSWORD, local_dir=str(local), remote_dir="/www",
+                    production=True)
+        window.store.upsert(site)
+        window.open_site(window.store.sites[site.id])
+        tab = window.site_tabs()[0]
+        assert wait(app, lambda: tab.remote.path == "/www" and tab.local.path == str(local))
+
+        dlg = SyncDialog(window, tab)
+        dlg.mirror.setChecked(True)
+        dlg.run_compare()
+        assert wait(app, lambda: dlg.plan is not None), dlg.summary.text()
+        rows = {dlg.tree.topLevelItem(i).text(1): dlg.tree.topLevelItem(i).text(0)
+                for i in range(dlg.tree.topLevelItemCount())}
+        assert rows == {"index.html": "Upload", "css/": "Create folder on server",
+                        "css/app.css": "Upload", "stale.html": "Delete on server"}
+        assert "delete on server" in dlg.summary.text()
+
+        warned = []
+        monkeypatch.setattr(QMessageBox, "warning",
+                            staticmethod(lambda *a, **k: warned.append(a[2]) or QMessageBox.Yes))
+        dlg.apply()
+        assert wait(app, lambda: (root / "www" / "css" / "app.css").exists() and window.engine.pending() == 0)
+        assert "PRODUCTION" in warned[0] and "stale.html" in warned[0]
+        assert not (root / "www" / "stale.html").exists()
+
+        # save as a profile, then run it again from the Sync menu: nothing left to do
+        monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Deploy web", True)))
+        dlg.save_profile()
+        assert window.store.find_profile("deploy web")["options"]["mirror"] is True
+        assert any("Deploy web" in a.text() for a in window.sync_menu.actions())
+        from blamixfiles.core.sync import SyncProfile
+        again = SyncDialog(window, tab, SyncProfile.from_dict(window.store.find_profile("Deploy web")),
+                           auto_compare=True)
+        assert wait(app, lambda: again.plan is not None)
+        assert again.plan.actions == [] and "Nothing to do" in again.summary.text()
+        if True:
+            again.show()
+            dlg.show()
+            wait(app, lambda: False, 0.2)
+            dlg.grab().save(str(tmp_path.parent / "shot-sync.png"))

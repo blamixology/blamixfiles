@@ -21,8 +21,8 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 
 | | Feature |
 |---|---|
-| 🗓 | Folder compare and sync with a preview of every change (one-way mirror, two-way) |
-| 🗓 | Saved sync profiles, `blamixfiles sync <profile>` |
+| ✅ | Folder compare and sync with a preview of every change (one-way, mirror, two-way) |
+| ✅ | Saved sync profiles, `blamixfiles sync <profile>` |
 | 🗓 | Checksum verification after transfers |
 | 🗓 | S3-compatible storage (AWS, MinIO, Backblaze B2, Wasabi, Hetzner, R2) |
 | 🗓 | WebDAV (Nextcloud) |

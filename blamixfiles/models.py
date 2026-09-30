@@ -117,10 +117,12 @@ class Store:
             s = Site.from_dict(d)
             self.sites[s.id] = s
         self.bookmarks: list[dict] = list(data.get("bookmarks", []))
+        self.sync_profiles: list[dict] = list(data.get("sync_profiles", []))
 
     def to_dict(self) -> dict:
         return {"version": 1, "sites": [asdict(s) for s in self.sites.values()],
-                "groups": sorted(self.groups), "bookmarks": self.bookmarks}
+                "groups": sorted(self.groups), "bookmarks": self.bookmarks,
+                "sync_profiles": self.sync_profiles}
 
     def save(self) -> None:
         self.vault.save(self.to_dict())
@@ -133,6 +135,21 @@ class Store:
 
     def delete(self, site_id: str) -> None:
         self.sites.pop(site_id, None)
+        self.sync_profiles = [p for p in self.sync_profiles if p.get("site_id") != site_id]
+        self.save()
+
+    # ---- sync profiles (stored as dicts; see core.sync.SyncProfile)
+    def save_profile(self, profile: dict) -> None:
+        self.sync_profiles = [p for p in self.sync_profiles if p["name"].lower() != profile["name"].lower()]
+        self.sync_profiles.append(profile)
+        self.sync_profiles.sort(key=lambda p: p["name"].lower())
+        self.save()
+
+    def find_profile(self, name: str) -> dict | None:
+        return next((p for p in self.sync_profiles if p["name"].lower() == name.lower()), None)
+
+    def delete_profile(self, name: str) -> None:
+        self.sync_profiles = [p for p in self.sync_profiles if p["name"].lower() != name.lower()]
         self.save()
 
     def touch(self, site_id: str) -> None:

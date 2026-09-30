@@ -75,6 +75,7 @@ class Job:
     policy: str = ""              # per-job override ("" = engine policy)
     cancel_flag: bool = False
     key: str = field(default_factory=lambda: uuid.uuid4().hex)   # stable id for the saved queue
+    make_parents: bool = False    # create missing parent folders first (sync jobs)
 
     @property
     def name(self) -> str:
@@ -136,6 +137,11 @@ class TransferEngine:
                   is_dir=entry.is_dir, size=entry.size, mtime=entry.mtime)
         self._add([job])
         return job
+
+    def add(self, jobs: list[Job]) -> list[Job]:
+        """Queue ready-made jobs (the sync planner builds them with exact source/target paths)."""
+        self._add(jobs)
+        return jobs
 
     def cancel(self, job_id: int | None = None) -> None:
         """Cancel one job, or everything that hasn't finished."""
@@ -395,6 +401,10 @@ class TransferEngine:
 
     def _upload_file(self, job: Job, b: Backend) -> None:
         st = os.stat(job.src)
+        if job.make_parents:
+            parent = b.parent(job.dst)
+            if parent not in ("", "/") and b.stat(parent) is None:
+                b.makedirs(parent)
         job.size, job.mtime = st.st_size, st.st_mtime
         offset = self._decide(job, st.st_size, st.st_mtime, b.stat(job.dst))
         if offset is None:
@@ -423,6 +433,8 @@ class TransferEngine:
             job.status = SKIPPED
             return
         job.done = job.resumed_from = offset
+        if job.make_parents:
+            os.makedirs(os.path.dirname(job.dst), exist_ok=True)
         # with a download limit, don't let SFTP read the whole file ahead at full speed
         b.read_ahead = self.limits["download"].rate == 0
         with open(job.dst, "r+b" if offset else "wb") as f:

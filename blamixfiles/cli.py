@@ -4,6 +4,9 @@
   blamixfiles ls   <site>:/path | sftp://user@host/path
   blamixfiles get  <site>:/remote/file-or-folder  ./local-folder
   blamixfiles put  ./local-file-or-folder  <site>:/remote/folder   [--limit 512]
+  blamixfiles sync   ./dist mysite:/var/www --mirror --dry-run
+  blamixfiles sync   "Deploy web"            (a profile saved in the app)
+  blamixfiles profiles
   blamixfiles import filezilla [sitemanager.xml]
 
 Saved sites come from the encrypted vault: the master password is read from
@@ -206,6 +209,74 @@ def cmd_import(a) -> int:
     return 0
 
 
+def cmd_profiles(a) -> int:
+    for p in store().sync_profiles:
+        site = store().sites.get(p["site_id"])
+        o = p.get("options", {})
+        arrow = {"upload": "→", "download": "←", "both": "⇄"}.get(o.get("direction", "upload"), "→")
+        print(f"{p['name']:28} {p['local_dir']} {arrow} {site.label if site else '(deleted site)'}:{p['remote_dir']}"
+              + ("  [mirror]" if o.get("mirror") else ""))
+    return 0
+
+
+def cmd_sync(a) -> int:
+    from .core import sync as S
+    from .core.backends.local import LocalBackend
+    if a.remote is None:                       # a saved profile
+        prof_d = store().find_profile(a.source)
+        if prof_d is None:
+            raise UsageError(f"No sync profile named '{a.source}' (see: blamixfiles profiles)")
+        prof = S.SyncProfile.from_dict(prof_d)
+        site = store().sites.get(prof.site_id)
+        if site is None:
+            raise UsageError(f"The site of profile '{prof.name}' was deleted")
+        site, local_root, remote_root, opt = site.copy(), prof.local_dir, prof.remote_dir, prof.options
+    else:
+        site, remote_root = resolve(a.remote)
+        local_root = a.source
+        opt = S.SyncOptions(tolerance=2.0 if site.is_ssh else 60.0)
+    if a.direction:
+        opt.direction = a.direction
+    if a.mirror:
+        opt.mirror = True
+    if a.size_only:
+        opt.compare = "size"
+    if a.exclude:
+        opt.excludes = opt.excludes + a.exclude
+    if opt.direction == "both":
+        opt.mirror = False
+    if not os.path.isdir(local_root):
+        raise UsageError(f"Local folder not found: {local_root}")
+
+    b = connect(site)
+    try:
+        remote_root = remote_root or b.home()
+        loc = S.scan(LocalBackend(), os.path.abspath(local_root), opt.excludes)
+        rem = S.scan(b, remote_root, opt.excludes)
+        plan = S.compare(loc, rem, os.path.abspath(local_root), remote_root, opt)
+        if a.json:
+            print(json.dumps({"summary": plan.summary(), "actions": [
+                {"action": x.kind, "path": x.rel, "dir": x.is_dir, "reason": x.reason, "bytes": x.size}
+                for x in plan.actions]}, indent=2))
+        elif not a.quiet or a.dry_run:
+            for x in plan.actions:
+                print(f"{S.ACTION_LABELS[x.kind]:24} {x.rel}{'/' if x.is_dir else ''}   ({x.reason})")
+            print(plan.summary() + (f", {plan.transfer_bytes() / 1e6:.1f} MB to transfer"
+                                    if plan.transfer_bytes() else ""))
+        if a.dry_run or not any(x.kind != S.CONFLICT for x in plan.actions):
+            return 0
+        deletes = [x for x in plan.actions if x.kind in S.DELETES]
+        if deletes and not a.yes:
+            if not sys.stdin.isatty():
+                raise UsageError(f"The plan deletes {len(deletes)} item(s): add --yes to allow that "
+                                 "in scripts (or run with --dry-run first)")
+            if not _yes(f"Delete {len(deletes)} item(s)?"):
+                return 1
+        return _run(lambda eng: S.apply(plan, site, eng, b, LocalBackend()), "overwrite", a.quiet, a.limit)
+    finally:
+        b.close()
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="blamixfiles", description="BlamixFiles command line")
     ap.add_argument("--version", action="version", version=f"BlamixFiles {__version__}")
@@ -232,6 +303,21 @@ def main(argv: list[str] | None = None) -> None:
                        help="speed limit in KB/s (default: unlimited)")
         p.add_argument("-q", "--quiet", action="store_true")
         p.set_defaults(fn=fn)
+    p = sub.add_parser("sync", help="compare a local and a remote folder and bring them in line")
+    p.add_argument("source", help="a saved profile name, or a local folder")
+    p.add_argument("remote", nargs="?", help="<site>:/path or a URL (when source is a folder)")
+    p.add_argument("--direction", choices=["upload", "download", "both"])
+    p.add_argument("--mirror", action="store_true", help="also delete what the source side doesn't have")
+    p.add_argument("--size-only", action="store_true", help="compare sizes only, ignore timestamps")
+    p.add_argument("--exclude", action="append", metavar="PATTERN", help="skip matching names/paths")
+    p.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
+    p.add_argument("--yes", action="store_true", help="allow deletes without asking")
+    p.add_argument("--json", action="store_true", help="print the plan as JSON")
+    p.add_argument("--limit", type=int, default=0, metavar="KB/s")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("profiles", help="list saved sync profiles")
+    p.set_defaults(fn=cmd_profiles)
     p = sub.add_parser("import", help="import sites from another client")
     p.add_argument("source", choices=["filezilla"])
     p.add_argument("file", nargs="?")

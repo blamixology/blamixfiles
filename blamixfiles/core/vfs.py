@@ -112,7 +112,13 @@ class Backend:
         parent = self.parent(path)
         if parent != path:
             self.makedirs(parent)
-        self.mkdir(path)
+        try:
+            self.mkdir(path)
+        except Exception:
+            # another transfer may have just created it
+            st = self.stat(path)
+            if st is None or not st.is_dir:
+                raise
 
     def remove(self, path: str) -> None:
         raise NotImplementedError
