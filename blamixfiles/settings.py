@@ -12,6 +12,8 @@ DEFAULTS = {
     "workers": 4,
     "preserve_mtime": True,
     "last_local_dir": "",
+    "limit_up_kb": 0,          # speed limits in KB/s, 0 = unlimited
+    "limit_down_kb": 0,
 }
 
 

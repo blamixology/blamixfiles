@@ -136,7 +136,8 @@ class SFTPBackend(Backend):
             size = f.stat().st_size or 0
             if offset:
                 f.seek(offset)
-            f.prefetch(max(0, size - offset))   # parallel read requests
+            if self.read_ahead:
+                f.prefetch(max(0, size - offset))   # parallel read requests
             while True:
                 chunk = f.read(BLOCK)
                 if not chunk:

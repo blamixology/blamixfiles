@@ -216,3 +216,108 @@ def test_malicious_listing_cannot_escape(tmp_path):
     assert not (tmp_path / "escape.txt").exists() and not (dest / "escape.txt").exists()
     assert any(j.status == E.FAILED and "unsafe" in j.error for j in eng.jobs)
     eng.shutdown()
+
+
+# ------------------------------------------------------------------ speed limits
+def test_token_bucket_limits_rate():
+    import time as _t
+
+    from blamixfiles.core.ratelimit import TokenBucket
+    b = TokenBucket(200_000)                  # 200 KB/s
+    start = _t.monotonic()
+    for _ in range(20):
+        b.consume(32 * 1024)                  # 640 KB
+    took = _t.monotonic() - start
+    assert 2.4 < took < 4.5, took             # ~3 s (minus the initial burst allowance)
+    b.rate = 0
+    start = _t.monotonic()
+    b.consume(10_000_000)
+    assert _t.monotonic() - start < 0.05      # unlimited again
+
+
+def test_upload_respects_limit_and_cancel(served, tmp_path):
+    import time as _t
+    site, root = served
+    f = tmp_path / "limited.bin"
+    f.write_bytes(os.urandom(400_000))
+    eng = E.TransferEngine(lambda s: open_backend(s), workers=1, limit_up=200_000)
+    start = _t.monotonic()
+    j = eng.upload(site, str(f), "/")
+    assert eng.wait(20)
+    assert j.status == E.DONE and _t.monotonic() - start > 1.2
+    # a very slow limit must not make cancel hang
+    eng.set_limit("upload", 1_000)
+    j2 = eng.upload(site, str(f), "/")
+    _t.sleep(0.5)
+    t0 = _t.monotonic()
+    eng.cancel(j2.id)
+    assert eng.wait(5) and j2.status == E.CANCELLED and _t.monotonic() - t0 < 2
+    eng.shutdown()
+
+
+# ------------------------------------------------------------------ saved queue
+def test_queue_survives_restart(served, tmp_path):
+    from blamixfiles.core.queue_store import QueueStore
+    site, root = served
+    files = []
+    for i in range(3):
+        p = tmp_path / f"f{i}.txt"
+        p.write_text(f"file {i}")
+        files.append(p)
+    db = tmp_path / "queue.db"
+
+    # session 1: queue three uploads while paused, then "crash"
+    store = QueueStore(db)
+    eng = E.TransferEngine(lambda s: open_backend(s), workers=1, store=store)
+    eng.set_paused(True)
+    for p in files:
+        eng.upload(site, str(p), "/")
+    eng.shutdown()
+    store.close()
+
+    # session 2: they come back, in order, paused; resuming uploads them
+    store = QueueStore(db)
+    jobs = store.load({site.id: site})
+    assert [os.path.basename(j.src) for j in jobs] == ["f0.txt", "f1.txt", "f2.txt"]
+    eng = E.TransferEngine(lambda s: open_backend(s), workers=1, store=store)
+    eng.restore(jobs)
+    assert eng.paused
+    eng.set_paused(False)
+    assert eng.wait(20)
+    assert all(j.status == E.DONE for j in jobs)
+    assert sorted(p.name for p in root.iterdir()) == ["f0.txt", "f1.txt", "f2.txt"]
+    assert store.load({site.id: site}) == []          # finished jobs are forgotten
+    eng.shutdown()
+
+
+def test_saved_queue_drops_deleted_sites_and_discard(tmp_path):
+    from blamixfiles.core.queue_store import QueueStore
+    store = QueueStore(tmp_path / "q.db")
+    keep, gone = Site(host="a"), Site(host="b")
+    for s in (keep, gone):
+        store.sync(E.Job("upload", s, "/x", "/y", status=E.QUEUED))
+    assert len(store.load({keep.id: keep})) == 1          # 'gone' was deleted from the vault
+    assert len(store.load({keep.id: keep, gone.id: gone})) == 1
+    eng = E.TransferEngine(lambda s: None, workers=1, store=store)
+    eng.restore(store.load({keep.id: keep}))
+    eng.discard_unfinished()
+    assert store.load({keep.id: keep}) == []
+    eng.shutdown()
+
+
+def test_interrupted_transfer_resumes(tmp_path):
+    from blamixfiles.core.queue_store import QueueStore
+    store = QueueStore(tmp_path / "q.db")
+    s = Site(host="a")
+    store.sync(E.Job("upload", s, "/big.iso", "/remote/big.iso", size=10, status=E.RUNNING))
+    (job,) = store.load({s.id: s})
+    assert job.status == E.QUEUED and job.policy == "resume"
+
+
+def test_quick_connect_jobs_are_not_saved(tmp_path):
+    from blamixfiles.core.queue_store import QueueStore
+    saved = Site(host="saved")
+    store = QueueStore(tmp_path / "q.db", keep_site=lambda sid: sid == saved.id)
+    store.sync(E.Job("upload", Site(host="quick"), "/a", "/b"))
+    store.sync(E.Job("upload", saved, "/a", "/b"))
+    assert len(store.load({saved.id: saved})) == 1

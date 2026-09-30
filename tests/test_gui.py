@@ -127,3 +127,46 @@ def test_browse_upload_edit_save(app, window, tmp_path, proto):
             wait(app, lambda: False, 0.3)
             window.grab().save(str(tmp_path.parent / f"shot-browser-{proto}.png"))
         assert all(j.status == E.DONE for j in window.engine.jobs)
+
+
+def test_saved_queue_offered_on_start_and_speed_menu(app, tmp_path, monkeypatch):
+    """Transfers left over from last time come back paused with a Resume banner."""
+    import blamixfiles.ui.dialogs as D
+    monkeypatch.setattr(D, "ask_host_key", lambda *a: True)
+    from blamixfiles.core.queue_store import QueueStore
+    from blamixfiles.paths import data_dir
+    from blamixfiles.ui.main_window import MainWindow
+    root = tmp_path / "srv"
+    root.mkdir()
+    src = tmp_path / "left-over.txt"
+    src.write_text("from last session")
+    with SFTPTestServer(root) as srv:
+        store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+        site = Site(name="srv", protocol="sftp", host="127.0.0.1", port=srv.port,
+                    username=USER, password=PASSWORD)
+        store.upsert(site)
+        qs = QueueStore(data_dir() / "queue.db")
+        qs.sync(E.Job("upload", site, str(src), "/left-over.txt", size=17, status=E.RUNNING))
+        qs.close()
+
+        win = MainWindow(store, Settings())
+        win.show()
+        try:
+            assert win.engine.paused and win.queue.banner.isVisibleTo(win)
+            assert "1 transfer" in win.queue.banner_text.text()
+            assert not (root / "left-over.txt").exists()
+            win.queue._resume_restored()          # the "Resume" button
+            # no tab was open for the site: the connector opens one and connects
+            assert wait(app, lambda: (root / "left-over.txt").exists() and win.engine.pending() == 0, 20)
+            assert (root / "left-over.txt").read_text() == "from last session"
+            assert len(win.site_tabs()) == 1
+
+            win.queue.set_limit("upload", 512)
+            assert win.engine.limits["upload"].rate == 512 * 1024
+            assert "512 KB/s" in win.queue.speed_btn.toolTip()
+            assert Settings()["limit_up_kb"] == 512            # remembered
+        finally:
+            for t in win.site_tabs():
+                t.close()
+            win.engine.shutdown()
+            win.hide()

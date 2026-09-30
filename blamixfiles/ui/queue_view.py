@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QMenu, QStyledItemDelegate,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import QActionGroup, QColor, QPainter
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton,
+                               QStyledItemDelegate, QToolButton, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from ..core import engine as E
 from .fmt import human_size, human_speed
@@ -35,9 +36,10 @@ class _BarDelegate(QStyledItemDelegate):
 class QueueView(QWidget):
     summary = Signal(str)
 
-    def __init__(self, engine: E.TransferEngine, parent=None):
+    def __init__(self, engine: E.TransferEngine, settings=None, parent=None):
         super().__init__(parent)
         self.engine = engine
+        self.settings = settings
         self.items: dict[int, QTreeWidgetItem] = {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -63,11 +65,32 @@ class QueueView(QWidget):
             b.clicked.connect(slot)
             bl.addWidget(b)
             return b
+        self.speed_btn = QToolButton()
+        self.speed_btn.setIcon(icon("gauge"))
+        self.speed_btn.setPopupMode(QToolButton.InstantPopup)
+        self.speed_btn.setMenu(self._speed_menu())
+        bl.addWidget(self.speed_btn)
+        self._update_speed_tip()
         self.pause_btn = tb("pause", "Pause the queue", self._toggle_pause)
         tb("retry", "Retry failed", lambda: engine.retry())
         tb("x", "Cancel all", lambda: engine.cancel())
         tb("clear", "Clear finished", self.clear_finished)
         lay.addWidget(bar)
+
+        # "you have unfinished transfers from last time" banner
+        self.banner = QWidget(objectName="Banner")
+        bn = QHBoxLayout(self.banner)
+        bn.setContentsMargins(12, 6, 12, 6)
+        self.banner_text = QLabel("")
+        bn.addWidget(self.banner_text, 1)
+        resume = QPushButton(icon("play", "#0b0d12"), " Resume", objectName="Primary")
+        resume.clicked.connect(self._resume_restored)
+        discard = QPushButton("Discard")
+        discard.clicked.connect(self._discard_restored)
+        bn.addWidget(resume)
+        bn.addWidget(discard)
+        self.banner.hide()
+        lay.addWidget(self.banner)
 
         self.tree = QTreeWidget()
         self.tree.setObjectName("Files")
@@ -84,12 +107,89 @@ class QueueView(QWidget):
         self.tree.customContextMenuRequested.connect(self._menu)
         lay.addWidget(self.tree, 1)
 
-    def _toggle_pause(self) -> None:
-        p = not self.engine.paused
-        self.engine.set_paused(p)
+    # ------------------------------------------------------------ saved queue
+    def offer_resume(self, n: int) -> None:
+        self.banner_text.setText(f"{n} transfer(s) didn't finish last time. Resume them?")
+        self.banner.show()
+        self._sync_pause_button()
+
+    def _resume_restored(self) -> None:
+        self.banner.hide()
+        self.engine.set_paused(False)
+        self._sync_pause_button()
+
+    def _discard_restored(self) -> None:
+        self.banner.hide()
+        self.engine.discard_unfinished()
+        self.engine.set_paused(False)
+        self._sync_pause_button()
+        self.clear_finished()
+
+    # ------------------------------------------------------------ speed limits
+    PRESETS = [0, 128, 512, 1024, 2048, 5120, 10240]        # KB/s
+
+    @staticmethod
+    def _fmt_limit(kb: int) -> str:
+        if not kb:
+            return "Unlimited"
+        return f"{kb // 1024} MB/s" if kb >= 1024 and kb % 1024 == 0 else f"{kb} KB/s"
+
+    def _speed_menu(self) -> QMenu:
+        m = QMenu(self)
+        for direction, title in (("upload", "Upload limit"), ("download", "Download limit")):
+            sub = m.addMenu(icon("upload" if direction == "upload" else "download"), title)
+            group = QActionGroup(sub)
+            current = self.engine.limits[direction].rate // 1024
+            for kb in self.PRESETS:
+                a = sub.addAction(self._fmt_limit(kb))
+                a.setCheckable(True)
+                a.setChecked(kb == current)
+                group.addAction(a)
+                a.triggered.connect(lambda _=False, d=direction, v=kb: self.set_limit(d, v))
+            sub.addSeparator()
+            custom = sub.addAction("Custom…")
+            custom.triggered.connect(lambda _=False, d=direction: self._custom_limit(d))
+            sub.aboutToShow.connect(lambda sub=sub, d=direction: self._check_current(sub, d))
+        return m
+
+    def _check_current(self, sub: QMenu, direction: str) -> None:
+        current = self.engine.limits[direction].rate // 1024
+        for a in sub.actions():
+            if a.isCheckable():
+                a.setChecked(a.text() == self._fmt_limit(current))
+
+    def _custom_limit(self, direction: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        kb, ok = QInputDialog.getInt(self, "Speed limit", f"{direction.capitalize()} limit in KB/s (0 = unlimited):",
+                                     self.engine.limits[direction].rate // 1024, 0, 10_000_000, 64)
+        if ok:
+            self.set_limit(direction, kb)
+
+    def set_limit(self, direction: str, kb: int) -> None:
+        self.engine.set_limit(direction, kb * 1024)
+        if self.settings is not None:
+            self.settings["limit_up_kb" if direction == "upload" else "limit_down_kb"] = kb
+            self.settings.save()
+        self._update_speed_tip()
+        self._update_summary()
+
+    def _update_speed_tip(self) -> None:
+        up = self.engine.limits["upload"].rate // 1024
+        down = self.engine.limits["download"].rate // 1024
+        self.speed_btn.setToolTip(f"Speed limits: ↑ {self._fmt_limit(up)} · ↓ {self._fmt_limit(down)}")
+        limited = bool(up or down)
+        self.speed_btn.setIcon(icon("gauge", C["warn"] if limited else None))
+
+    def _sync_pause_button(self) -> None:
+        p = self.engine.paused
         self.pause_btn.setIcon(icon("play" if p else "pause"))
         self.pause_btn.setToolTip("Resume the queue" if p else "Pause the queue")
         self._update_summary()
+
+    def _toggle_pause(self) -> None:
+        self.engine.set_paused(not self.engine.paused)
+        self.banner.hide()
+        self._sync_pause_button()
 
     def update_job(self, job: E.Job) -> None:
         it = self.items.get(job.id)
@@ -134,6 +234,10 @@ class QueueView(QWidget):
             parts.append(f"{failed} failed")
         if self.engine.paused:
             parts.append("paused")
+        up, down = self.engine.limits["upload"].rate, self.engine.limits["download"].rate
+        if up or down:
+            parts.append("limited " + " ".join(x for x in (
+                f"↑{self._fmt_limit(up // 1024)}" if up else "", f"↓{self._fmt_limit(down // 1024)}" if down else "") if x))
         text = " · ".join(parts)
         self.title.setText("TRANSFERS" + (f"  ·  {text}" if text else ""))
         self.summary.emit(text)

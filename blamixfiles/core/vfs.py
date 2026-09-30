@@ -59,6 +59,7 @@ class Backend:
     caps = Capabilities()
     name = "backend"
     is_local = False
+    read_ahead = True        # SFTP: request the whole file in parallel (off when speed-limited)
 
     # ---- lifecycle
     def connect(self) -> None:

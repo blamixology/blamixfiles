@@ -12,9 +12,10 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Built-in editor with syntax highlighting, save to server with conflict check |
 | ✅ | Encrypted site vault, FileZilla import |
 | ✅ | CLI: `ls`, `get`, `put`, `sites`, `import` |
-| 🗓 | Queue survives restarts (saved to disk) |
-| 🗓 | Speed limits |
-| 🗓 | Windows MSI + macOS/Linux builds in CI, release script |
+| ✅ | Queue survives restarts (saved to disk) |
+| ✅ | Speed limits (upload/download, also `--limit` in the CLI) |
+| ✅ | Portable builds for Windows, macOS and Linux from CI, `./dev.sh release` |
+| 🗓 | Windows MSI installer, code signing |
 
 ## Next
 

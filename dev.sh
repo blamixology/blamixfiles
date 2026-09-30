@@ -120,14 +120,27 @@ cmd_ship() {
 cmd_build() {
   ensure_venv requirements.txt
   "$VPY" -m pip show pyinstaller >/dev/null 2>&1 || "$VPY" -m pip install -q pyinstaller
-  if [ -d dist/BlamixFiles/data ]; then       # keep your data when rebuilding over an old build
-    say "Keeping dist/BlamixFiles/data"
-    rm -rf _data_backup && mv dist/BlamixFiles/data _data_backup
+  local os_name arch app exe data icon=() extra=()
+  case "$WIN$(uname -s)" in
+    1*) os_name=windows ;; 0Darwin) os_name=macos ;; *) os_name=linux ;;
+  esac
+  case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=x64 ;; esac
+  if [ "$os_name" = macos ]; then
+    app=dist/BlamixFiles.app; exe=$app/Contents/MacOS/BlamixFiles; data=dist/data
+    "$VPY" -m pip show pillow >/dev/null 2>&1 || "$VPY" -m pip install -q pillow   # png -> icns
+    icon=(--icon blamixfiles/assets/app.png)
+    extra=(--osx-bundle-identifier ro.blamixology.blamixfiles)
+  else
+    app=dist/BlamixFiles; exe=$app/BlamixFiles; data=$app/data
+    [ "$WIN" = 1 ] && { exe=$exe.exe; icon=(--icon blamixfiles/assets/app.ico); }
   fi
-  local icon=()
-  [ "$WIN" = 1 ] && icon=(--icon blamixfiles/assets/app.ico)
-  say "PyInstaller"
-  "$VPY" -m PyInstaller --noconfirm --clean --onedir --windowed --name BlamixFiles ${icon[@]+"${icon[@]}"} \
+  if [ -d "$data" ]; then                     # keep your data when rebuilding over an old build
+    say "Keeping $data"
+    rm -rf _data_backup && mv "$data" _data_backup
+  fi
+  say "PyInstaller ($os_name-$arch)"
+  "$VPY" -m PyInstaller --noconfirm --clean --onedir --windowed --name BlamixFiles \
+    ${icon[@]+"${icon[@]}"} ${extra[@]+"${extra[@]}"} \
     --add-data "blamixfiles/assets${SEP}blamixfiles/assets" \
     --collect-submodules pygments.lexers --collect-submodules pygments.styles \
     --exclude-module tkinter --exclude-module PySide6.QtWebEngineCore \
@@ -135,30 +148,33 @@ cmd_build() {
     --exclude-module PySide6.QtCharts --exclude-module PySide6.QtMultimedia \
     --exclude-module PySide6.QtQuick3D --exclude-module PySide6.QtDesigner \
     --log-level WARN run.py
-  "$VPY" packaging/prune_qt.py dist/BlamixFiles
-  [ -d _data_backup ] && mv _data_backup dist/BlamixFiles/data
+  [ "$os_name" = macos ] && rm -rf dist/BlamixFiles        # the .app is what you want
+  "$VPY" packaging/prune_qt.py "$app"
   rm -rf build BlamixFiles.spec
-  local os_name
-  case "$WIN$(uname -s)" in
-    1*) os_name=windows ;; 0Darwin) os_name=macos ;; *) os_name=linux ;;
-  esac
+
   say "Selftest of the built app"
-  local exe=dist/BlamixFiles/BlamixFiles
-  [ "$WIN" = 1 ] && exe=dist/BlamixFiles/BlamixFiles.exe
-  # the windowed exe has no console on Windows, so check its exit code only
+  # (the windowed exe has no console on Windows, so only its exit code counts)
   if QT_QPA_PLATFORM=offscreen BLAMIXFILES_SELFTEST=1 "$exe" >/dev/null 2>&1; then
     ok "Built app starts"
   else
+    [ -d _data_backup ] && mv _data_backup "$data"
     die "The built app failed its selftest"
   fi
+
   say "Archive"
-  "$VPY" - "$os_name" <<'PY'
-import shutil, sys
-fmt = "zip" if sys.argv[1] == "windows" else "gztar"
-out = shutil.make_archive(f"dist/BlamixFiles-{sys.argv[1]}-x64", fmt, "dist", "BlamixFiles")
-print(out)
-PY
-  ok "Done: dist/BlamixFiles  (copy the whole folder anywhere; data stays in its data/ folder)"
+  local out="dist/BlamixFiles-$os_name-$arch"
+  rm -f "$out.zip" "$out.tar.gz"
+  case "$os_name" in
+    macos) (cd dist && ditto -c -k --keepParent BlamixFiles.app "BlamixFiles-$os_name-$arch.zip") ;;
+    windows) "$VPY" -c "import shutil; shutil.make_archive('$out', 'zip', 'dist', 'BlamixFiles')" ;;
+    *) tar -C dist -czf "$out.tar.gz" BlamixFiles ;;
+  esac
+  [ -d _data_backup ] && mv _data_backup "$data"          # after archiving: your data never ships
+  ls -1 dist/BlamixFiles-* 2>/dev/null
+  ok "Done: $app"
+  if [ "$os_name" = macos ]; then
+    echo "   Unsigned app: open it the first time with right-click → Open."
+  fi
 }
 
 cmd_release() {

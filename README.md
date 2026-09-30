@@ -25,7 +25,7 @@ code once; transfers reuse that login.
 
 - **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), FTP, FTPS explicit and implicit
 - **Dual-pane browser:** drag & drop between panes and from Explorer/Finder, filter, sort, rename, delete, new folder, permissions (chmod), copy path
-- **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved
+- **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
 - **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers, find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
 - **Site manager:** groups, colors, **production flag** (red tab + extra confirmation before deleting)
 - **Import from FileZilla** (File → Import, or `blamixfiles import filezilla`)

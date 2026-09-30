@@ -14,10 +14,12 @@ import itertools
 import os
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
 from .errors import friendly, is_connection_error
+from .ratelimit import TokenBucket
 from .vfs import Backend, BackendError, Cancelled, Entry
 
 POLICIES = {
@@ -72,6 +74,7 @@ class Job:
     resumed_from: int = 0
     policy: str = ""              # per-job override ("" = engine policy)
     cancel_flag: bool = False
+    key: str = field(default_factory=lambda: uuid.uuid4().hex)   # stable id for the saved queue
 
     @property
     def name(self) -> str:
@@ -96,8 +99,12 @@ class TransferEngine:
     def __init__(self, connector: Connector, workers: int = 3,
                  on_change: Callable[[Job], None] | None = None,
                  policy: str = "overwrite", ask: OverwriteAsk | None = None,
-                 preserve_mtime: bool = True):
+                 preserve_mtime: bool = True, store=None, limit_up: int = 0, limit_down: int = 0):
+        """store: optional QueueStore (unfinished jobs survive restarts).
+        limit_up / limit_down: bytes per second for all transfers together (0 = no limit)."""
         self.connector = connector
+        self.store = store
+        self.limits = {"upload": TokenBucket(limit_up), "download": TokenBucket(limit_down)}
         self.on_change = on_change or (lambda j: None)
         self.policy = policy
         self.ask = ask
@@ -155,6 +162,28 @@ class TransferEngine:
             self.jobs = [j for j in self.jobs if j.status not in (DONE, SKIPPED, CANCELLED)]
             return gone
 
+    def restore(self, jobs: list[Job], paused: bool = True) -> None:
+        """Put back jobs from the saved queue (paused by default, so the user decides)."""
+        if not jobs:
+            return
+        with self._cv:
+            self._paused = paused or self._paused
+        self._add(jobs)
+
+    def discard_unfinished(self) -> None:
+        """Drop everything that hasn't finished (and forget it on disk)."""
+        with self._cv:
+            for j in self.jobs:
+                if j.status not in FINISHED or j.status == FAILED:
+                    j.cancel_flag = True
+                    if j.status != RUNNING:
+                        j.status = CANCELLED
+                        self._emit(j, force=True)
+            self._cv.notify_all()
+
+    def set_limit(self, direction: str, bytes_per_s: int) -> None:
+        self.limits[direction].rate = bytes_per_s
+
     def set_paused(self, paused: bool) -> None:
         with self._cv:
             self._paused = paused
@@ -204,6 +233,11 @@ class TransferEngine:
         if not force and now - self._last_emit.get(job.id, 0) < 0.1:
             return
         self._last_emit[job.id] = now
+        if force and self.store is not None:
+            try:
+                self.store.sync(job)
+            except Exception:
+                pass
         try:
             self.on_change(job)
         except Exception:
@@ -349,10 +383,13 @@ class TransferEngine:
         return 0   # overwrite
 
     def _progress(self, job: Job):
+        bucket = self.limits[job.kind]
+
         def cb(n: int) -> None:
             if job.cancel_flag:
                 raise Cancelled()
             job.done += n
+            bucket.consume(n, lambda: job.cancel_flag)
             self._emit(job)
         return cb
 
@@ -386,6 +423,8 @@ class TransferEngine:
             job.status = SKIPPED
             return
         job.done = job.resumed_from = offset
+        # with a download limit, don't let SFTP read the whole file ahead at full speed
+        b.read_ahead = self.limits["download"].rate == 0
         with open(job.dst, "r+b" if offset else "wb") as f:
             if offset:
                 f.seek(offset)

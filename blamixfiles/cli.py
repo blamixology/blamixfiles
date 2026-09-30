@@ -3,7 +3,7 @@
   blamixfiles sites
   blamixfiles ls   <site>:/path | sftp://user@host/path
   blamixfiles get  <site>:/remote/file-or-folder  ./local-folder
-  blamixfiles put  ./local-file-or-folder  <site>:/remote/folder
+  blamixfiles put  ./local-file-or-folder  <site>:/remote/folder   [--limit 512]
   blamixfiles import filezilla [sitemanager.xml]
 
 Saved sites come from the encrypted vault: the master password is read from
@@ -136,7 +136,7 @@ def cmd_ls(a) -> int:
     return 0
 
 
-def _run(jobs_fn, policy: str, quiet: bool) -> int:
+def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0) -> int:
     def on_change(j: E.Job) -> None:
         if quiet or j.is_dir:
             return
@@ -147,7 +147,8 @@ def _run(jobs_fn, policy: str, quiet: bool) -> int:
         elif j.status == E.FAILED:
             print(f"✖ {j.src}: {j.error}", file=sys.stderr)
     eng = E.TransferEngine(lambda s: connect(s), workers=4, on_change=on_change,
-                           policy=policy if policy != "ask" else "overwrite")
+                           policy=policy if policy != "ask" else "overwrite",
+                           limit_up=limit_kb * 1024, limit_down=limit_kb * 1024)
     try:
         jobs_fn(eng)
         eng.wait()
@@ -176,7 +177,7 @@ def cmd_get(a) -> int:
     if entry is None:
         raise UsageError(f"Not found on the server: {path}")
     os.makedirs(a.dest, exist_ok=True)
-    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet)
+    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet, a.limit)
 
 
 def cmd_put(a) -> int:
@@ -191,7 +192,7 @@ def cmd_put(a) -> int:
     def queue(eng):
         for src in a.sources:
             eng.upload(site, os.path.abspath(src), path)
-    return _run(queue, a.policy, a.quiet)
+    return _run(queue, a.policy, a.quiet, a.limit)
 
 
 def cmd_import(a) -> int:
@@ -227,6 +228,8 @@ def main(argv: list[str] | None = None) -> None:
             p.add_argument("dest")
         p.add_argument("--if-exists", dest="policy", default="overwrite",
                        choices=["overwrite", "skip", "newer", "resume"])
+        p.add_argument("--limit", type=int, default=0, metavar="KB/s",
+                       help="speed limit in KB/s (default: unlimited)")
         p.add_argument("-q", "--quiet", action="store_true")
         p.set_defaults(fn=fn)
     p = sub.add_parser("import", help="import sites from another client")

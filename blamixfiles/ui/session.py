@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import ftplib
+import threading
 
 import paramiko
 
@@ -35,6 +36,7 @@ class Session:
         self.backend: Backend | None = LocalBackend() if site is None else None
         self.worker = Worker(f"session-{site.host if site else 'local'}")
         self._closed = False
+        self._connect_lock = threading.RLock()   # the pane thread and transfer workers may both connect
 
     @property
     def is_local(self) -> bool:
@@ -74,9 +76,19 @@ class Session:
                 pass
             self.backend = None
 
+    def ensure_connected(self) -> Backend:
+        """Connect (asking the user whatever is needed) from any non-UI thread."""
+        return self._ensure()
+
     def _ensure(self) -> Backend:
+        with self._connect_lock:
+            return self._ensure_locked()
+
+    def _ensure_locked(self) -> Backend:
         if self.backend is not None and (self.is_local or self.backend.connected):
             return self.backend
+        if self._closed:
+            raise LoginCancelled("This site's tab was closed")
         self._drop()
         site = self.site
         # "ask": SFTP tries your SSH keys/agent first, FTP asks right away

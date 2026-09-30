@@ -14,9 +14,10 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMai
 
 from .. import __version__
 from ..core import engine as E
-from ..core.backends import open_backend
+from ..core.queue_store import QueueStore
 from ..core.vfs import Entry
 from ..models import Site, Store
+from ..paths import data_dir
 from ..settings import Settings
 from .bridge import ask_on_ui, on_ui
 from .dialogs import OverwriteDialog, SiteDialog
@@ -123,10 +124,14 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.setWindowTitle("BlamixFiles")
         self.resize(1320, 820)
+        self.queue_store = QueueStore(data_dir() / "queue.db", keep_site=lambda sid: sid in self.store.sites)
         self.engine = E.TransferEngine(self._connector, workers=int(settings["workers"]),
                                        on_change=lambda j: on_ui(lambda: self._job_changed(j)),
                                        policy=settings["policy"], ask=self._ask_overwrite,
-                                       preserve_mtime=bool(settings["preserve_mtime"]))
+                                       preserve_mtime=bool(settings["preserve_mtime"]),
+                                       store=self.queue_store,
+                                       limit_up=int(settings["limit_up_kb"]) * 1024,
+                                       limit_down=int(settings["limit_down_kb"]) * 1024)
         self._refresh_timer = QTimer(singleShot=True, interval=400)
         self._refresh_timer.timeout.connect(self._refresh_targets)
         self._refresh_dirs: set[tuple[int, str]] = set()
@@ -160,7 +165,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.welcome = self._build_welcome()
         self.tabs.addTab(self.welcome, "Welcome")
-        self.queue = QueueView(self.engine)
+        self.queue = QueueView(self.engine, settings)
         self.queue.summary.connect(self._queue_summary)
         vsplit = QSplitter(Qt.Vertical)
         vsplit.addWidget(self.tabs)
@@ -179,6 +184,10 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.queue_label)
         self._build_menu()
         self.reload_sites()
+        restored = self.queue_store.load(self.store.sites)
+        if restored:
+            self.engine.restore(restored, paused=True)
+            self.queue.offer_resume(len(restored))
         geo = settings["window_geometry"]
         if geo:
             self.restoreGeometry(QByteArray.fromBase64(geo.encode()))
@@ -442,6 +451,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Unsaved changes",
                                         "Save or close the files you're editing on this site first.")
                 return
+            busy = [j for j in self.engine.jobs
+                    if j.site.id == w.remote_session.site.id and j.status in (E.QUEUED, E.RUNNING)]
+            if busy and QMessageBox.question(
+                    self, "Transfers running",
+                    f"{len(busy)} transfer(s) for {w.site.label} haven't finished. "
+                    "Close the tab and cancel them?") != QMessageBox.Yes:
+                return
+            for j in busy:
+                self.engine.cancel(j.id)
             for e in editors:
                 self.tabs.removeTab(self.tabs.indexOf(e))
             w.close()
@@ -454,11 +472,19 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ transfers
     def _connector(self, site: Site):
-        """Worker threads ask for a connection to `site`: reuse the tab's session."""
-        for t in self.site_tabs():
-            if t.remote_session.site.id == site.id:
-                return t.remote_session.transfer_connector(site)
-        return open_backend(site)
+        """Called on transfer threads. Reuse the site's tab (its login, 2FA, pinned
+        certificate); if no tab is open (e.g. a transfer restored from last time),
+        open one, so every question (host key, password, code) can be asked."""
+        def find_or_open():
+            for t in self.site_tabs():
+                if t.remote_session.site.id == site.id:
+                    return t
+            known = self.store.sites.get(site.id, site)
+            self.open_site(known)
+            return self.site_tabs()[-1]
+        tab = ask_on_ui(find_or_open)
+        tab.remote_session.ensure_connected()
+        return tab.remote_session.transfer_connector(site)
 
     def _ask_overwrite(self, job: E.Job, existing) -> str:
         def ask():
@@ -527,13 +553,15 @@ class MainWindow(QMainWindow):
             if dirty:
                 parts.append(f"{len(dirty)} unsaved file(s)")
             if busy:
-                parts.append(f"{busy} transfer(s) in progress")
+                parts.append(f"{busy} transfer(s) not finished (saved sites resume next time)")
             if QMessageBox.question(self, "Quit BlamixFiles?", " and ".join(parts).capitalize()
                                     + ". Quit anyway?") != QMessageBox.Yes:
                 e.ignore()
                 return
         self.settings["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         self.settings["policy"] = self.engine.policy
+        # unfinished transfers stay in the saved queue: offered again on the next start
+        self.engine.store = None
         for t in self.site_tabs():
             t.close()
         self.settings.save()
