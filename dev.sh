@@ -22,6 +22,8 @@ esac
 if [ "$WIN" = 1 ]; then
   VPY=.venv/Scripts/python.exe
   SEP=";"                                   # PyInstaller --add-data separator
+  # Qt's offscreen platform (tests, selftest) doesn't find Windows fonts on its own
+  export QT_QPA_FONTDIR="${QT_QPA_FONTDIR:-${WINDIR:-C:/Windows}/Fonts}"
 else
   VPY=.venv/bin/python
   SEP=":"

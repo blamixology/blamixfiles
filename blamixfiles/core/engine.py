@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .errors import friendly, is_connection_error
-from .vfs import Backend, Cancelled, Entry
+from .vfs import Backend, BackendError, Cancelled, Entry
 
 POLICIES = {
     "ask": "Ask",                      # (GUI only; the CLI treats it as overwrite)
@@ -33,6 +33,24 @@ QUEUED, RUNNING, DONE, FAILED, SKIPPED, CANCELLED = (
 FINISHED = (DONE, FAILED, SKIPPED, CANCELLED)
 
 _ids = itertools.count(1)
+
+_WIN_BAD = set('<>:"|?*')
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def safe_local_name(name: str, windows: bool | None = None) -> str:
+    """A file name from the server, made safe to create locally. Names that could
+    climb out of the target folder ('..', 'a/b', 'a\\b' on Windows) are refused;
+    characters Windows can't store are replaced."""
+    windows = (os.name == "nt") if windows is None else windows
+    seps = ("/", "\\") if windows else ("/",)
+    if not name or name in (".", "..") or "\x00" in name or any(sep in name for sep in seps):
+        raise BackendError(f"Refusing unsafe file name from the server: {name!r}")
+    if windows:
+        name = "".join("_" if c in _WIN_BAD or ord(c) < 32 else c for c in name).rstrip(" .") or "_"
+        if name.split(".")[0].upper() in _WIN_RESERVED:
+            name = "_" + name
+    return name
 
 
 @dataclass
@@ -107,7 +125,7 @@ class TransferEngine:
         return job
 
     def download(self, site, entry: Entry, local_dir: str) -> Job:
-        job = Job("download", site, entry.path, os.path.join(local_dir, entry.name),
+        job = Job("download", site, entry.path, os.path.join(local_dir, safe_local_name(entry.name)),
                   is_dir=entry.is_dir, size=entry.size, mtime=entry.mtime)
         self._add([job])
         return job
@@ -294,7 +312,13 @@ class TransferEngine:
             for e in sorted(b.list(job.src), key=lambda x: (not x.is_dir, x.name.lower())):
                 if e.is_link and e.is_dir:
                     continue   # don't follow remote folder links (loops)
-                children.append(Job("download", job.site, e.path, os.path.join(job.dst, e.name),
+                try:
+                    local = os.path.join(job.dst, safe_local_name(e.name))
+                except BackendError as bad:
+                    skipped = Job("download", job.site, e.path, job.dst, status=FAILED, error=str(bad))
+                    children.append(skipped)
+                    continue
+                children.append(Job("download", job.site, e.path, local,
                                     is_dir=e.is_dir, size=e.size, mtime=e.mtime, policy=job.policy))
         job.status = DONE
         if children:

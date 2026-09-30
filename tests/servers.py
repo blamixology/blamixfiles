@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import posixpath
 import socket
 import threading
 from pathlib import Path
@@ -35,16 +36,22 @@ class _Handle(SFTPHandle):
 
 
 class _StubSFTP(SFTPServerInterface):
-    """Serves one folder as '/' (paths can't escape it)."""
+    """Serves one folder as '/'. SFTP paths are POSIX on every OS: normalise them with
+    posixpath (os.path would turn '/' into '\\' on Windows and escape to the drive root)
+    and refuse anything that would still land outside ROOT."""
 
     ROOT = "/tmp"
 
     def _real(self, path: str) -> str:
-        path = self.canonicalize(path)
-        return os.path.join(self.ROOT, path.lstrip("/"))
+        rel = self.canonicalize(path).lstrip("/")
+        real = os.path.abspath(os.path.join(self.ROOT, *[p for p in rel.split("/") if p]))
+        root = os.path.abspath(self.ROOT)
+        if os.path.commonpath([real, root]) != root:
+            raise PermissionError(13, "outside the test root", path)
+        return real
 
     def canonicalize(self, path):
-        return os.path.normpath("/" + path.lstrip("/")) if path not in (".", "") else "/"
+        return posixpath.normpath("/" + path.lstrip("/")) if path not in (".", "") else "/"
 
     def list_folder(self, path):
         real = self._real(path)

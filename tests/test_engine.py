@@ -169,3 +169,50 @@ def test_local_backend_roundtrip(tmp_path):
     assert b.read_bytes(p) == b"hello"
     assert b.stat(p).size == 5 and b.stat(str(tmp_path / "nope")) is None
     assert [e.name for e in b.list(str(tmp_path))] == ["f.txt"]
+
+
+@pytest.mark.parametrize("name,windows,expect", [
+    ("report.pdf", False, "report.pdf"),
+    ("a\\b.txt", False, "a\\b.txt"),            # a legal (if odd) name on Linux/macOS
+    ("what?.txt", True, "what_.txt"),
+    ("trailing. ", True, "trailing"),
+    ("CON.txt", True, "_CON.txt"),
+])
+def test_safe_local_name(name, windows, expect):
+    assert E.safe_local_name(name, windows=windows) == expect
+
+
+@pytest.mark.parametrize("name,windows", [
+    ("..", False), (".", True), ("../x", False), ("a/b", True), ("..\\..\\evil.exe", True), ("x\x00", False),
+])
+def test_unsafe_names_refused(name, windows):
+    from blamixfiles.core.vfs import BackendError
+    with pytest.raises(BackendError):
+        E.safe_local_name(name, windows=windows)
+
+
+def test_malicious_listing_cannot_escape(tmp_path):
+    """A hostile server returns '../escape.txt' in a folder listing."""
+    from blamixfiles.core.vfs import Backend, Capabilities, Entry
+
+    class Evil(Backend):
+        caps = Capabilities()
+        connected = True
+
+        def list(self, path):
+            return [Entry(name="../escape.txt", path="/d/../escape.txt", size=3),
+                    Entry(name="ok.txt", path="/d/ok.txt", size=2)]
+
+        def download(self, path, fp, offset=0, progress=None):
+            fp.write(b"hi" if path.endswith("ok.txt") else b"bad")
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    eng = E.TransferEngine(lambda s: Evil(), workers=1)
+    site = Site(host="evil")
+    eng.download(site, Entry(name="d", path="/d", is_dir=True), str(dest))
+    assert eng.wait(10)
+    assert (dest / "d" / "ok.txt").read_bytes() == b"hi"
+    assert not (tmp_path / "escape.txt").exists() and not (dest / "escape.txt").exists()
+    assert any(j.status == E.FAILED and "unsafe" in j.error for j in eng.jobs)
+    eng.shutdown()

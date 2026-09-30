@@ -37,3 +37,8 @@ blamixfiles = ["assets/*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+filterwarnings = [
+  "ignore::DeprecationWarning:pyftpdlib.*",     # the FTP test server, not our code
+  "ignore::DeprecationWarning:asynchat",
+  "ignore::DeprecationWarning:asyncore",
+]

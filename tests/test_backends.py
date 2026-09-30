@@ -99,12 +99,14 @@ def test_write_bytes_replaces_atomically(remote):
     b, root, site = remote
     target = root / "nginx.conf"
     target.write_bytes(b"old\n")
-    if site.protocol == "sftp":
+    # the test server keeps files on this machine's disk: Windows can't store Unix modes
+    check_mode = site.protocol == "sftp" and os.name != "nt"
+    if check_mode:
         os.chmod(target, 0o640)
     b.write_bytes("/nginx.conf", b"new content\n")
     assert target.read_bytes() == b"new content\n"
     assert not any(p.name.endswith(".blamixfiles-tmp") for p in root.iterdir())
-    if site.protocol == "sftp":
+    if check_mode:
         assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
 
