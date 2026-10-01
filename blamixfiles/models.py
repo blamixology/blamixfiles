@@ -12,8 +12,9 @@ from .vault import Vault
 COLORS = ["", "#ff6b6b", "#ffa94d", "#ffd43b", "#69db7c", "#38d9a9",
           "#4dabf7", "#748ffc", "#b197fc", "#f783ac"]
 
-URL_SCHEMES = {"sftp": "sftp", "ftp": "ftp", "ftps": "ftps",
-               "ftpes": "ftps", "ftpis": "ftps-implicit"}
+URL_SCHEMES = {"sftp": "sftp", "scp": "scp", "ftp": "ftp", "ftps": "ftps",
+               "dav": "webdav", "webdav": "webdav", "davs": "webdavs", "webdavs": "webdavs",
+               "ftpes": "ftps", "ftpis": "ftps-implicit", "s3": "s3"}
 
 
 def _id() -> str:
@@ -40,7 +41,8 @@ class Site:
     ftp_passive: bool = True
     ftp_encoding: str = "utf-8"
     tls_verify: bool = True           # FTPS: verify the server certificate
-    tls_pinned: str = ""              # FTPS: sha256 of a self-signed cert the user trusted
+    tls_pinned: str = ""              # FTPS/WebDAVS: sha256 of a self-signed cert the user trusted
+    s3_region: str = ""               # S3: region (empty = us-east-1 / provider default)
     parallel: int = 3                 # simultaneous transfers for this site
     notes: str = ""
     last_connected: float = 0.0
@@ -64,7 +66,7 @@ class Site:
 
     @property
     def is_ssh(self) -> bool:
-        return self.protocol == "sftp"
+        return self.protocol in ("sftp", "scp")
 
     def matches(self, query: str) -> bool:
         q = query.strip().lower()
@@ -92,14 +94,16 @@ class Site:
         u = urlsplit(url)
         proto = URL_SCHEMES.get(u.scheme.lower())
         if not proto:
-            raise ValueError(f"Unknown protocol '{u.scheme}' (use sftp, ftp, ftps or ftpis)")
+            raise ValueError(f"Unknown protocol '{u.scheme}' (use sftp, scp, ftp, ftps, ftpis, dav, davs or s3)")
         if not u.hostname:
             raise ValueError("No host name in the address")
         s = cls(protocol=proto, host=u.hostname, port=u.port or 0,
                 username=unquote(u.username or ""), password=unquote(u.password or ""))
+        if proto in ("webdav", "webdavs", "s3") and not s.password and s.username:
+            s.auth = "ask"
         if proto.startswith("ftp") and not s.username:
             s.auth = "anonymous"
-        elif not s.password and proto == "sftp":
+        elif not s.password and proto in ("sftp", "scp"):
             s.auth = "ask"             # keys/agent first, then ask for a password
         path = unquote(u.path or "")
         s.remote_dir = path

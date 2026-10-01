@@ -13,7 +13,7 @@ from blamixfiles.core import ssh
 from blamixfiles.core.backends import open_backend
 from blamixfiles.core.backends.ftp import FTPBackend, UntrustedCertificate, parse_list_line
 from blamixfiles.models import Site
-from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer
+from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer, WebDAVTestServer
 
 
 def connect(site):
@@ -27,13 +27,15 @@ def connect(site):
         return open_backend(site)
 
 
-@pytest.fixture(params=["sftp", "ftp", "ftps"])
+@pytest.fixture(params=["sftp", "ftp", "ftps", "webdav", "webdavs"])
 def remote(request, tmp_path):
     root = tmp_path / "srv"
     root.mkdir()
     with ExitStack() as stack:
         if request.param == "sftp":
             srv = stack.enter_context(SFTPTestServer(root))
+        elif request.param.startswith("webdav"):
+            srv = stack.enter_context(WebDAVTestServer(root, tls=request.param == "webdavs", certdir=tmp_path))
         else:
             srv = stack.enter_context(FTPTestServer(root, tls=request.param == "ftps", certdir=tmp_path))
         site = Site(protocol=request.param, host="127.0.0.1", port=srv.port,
@@ -72,9 +74,12 @@ def test_resume_both_directions(remote):
     b, root, _ = remote
     data = os.urandom(200_000)
     (root / "part.bin").write_bytes(data[:50_000])
-    src = io.BytesIO(data)
-    src.seek(50_000)
-    b.upload(src, "/part.bin", offset=50_000)
+    if b.caps.resume:                      # (SCP and WebDAV can't resume uploads)
+        src = io.BytesIO(data)
+        src.seek(50_000)
+        b.upload(src, "/part.bin", offset=50_000)
+    else:
+        b.upload(io.BytesIO(data), "/part.bin")
     assert (root / "part.bin").read_bytes() == data
 
     out = io.BytesIO()

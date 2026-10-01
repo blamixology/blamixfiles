@@ -9,15 +9,15 @@ from blamixfiles.core import engine as E
 from blamixfiles.core.backends import open_backend
 from blamixfiles.core.backends.local import LocalBackend
 from blamixfiles.models import Site
-from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer
+from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer, WebDAVTestServer
 from test_backends import connect
 
 
-@pytest.fixture(params=["sftp", "ftp"])
+@pytest.fixture(params=["sftp", "ftp", "webdav"])
 def served(request, tmp_path):
     root = tmp_path / "srv"
     root.mkdir()
-    Server = SFTPTestServer if request.param == "sftp" else FTPTestServer
+    Server = {"sftp": SFTPTestServer, "ftp": FTPTestServer, "webdav": WebDAVTestServer}[request.param]
     with Server(root) as srv:
         site = Site(protocol=request.param, host="127.0.0.1", port=srv.port,
                     username=USER, password=PASSWORD, parallel=3)
@@ -87,7 +87,8 @@ def test_policies(served, tmp_path):
     eng.policy = "resume"
     j = eng.upload(site, str(big), "/")
     eng.wait(10)
-    assert j.status == E.DONE and j.resumed_from == 123_456
+    resumable = site.protocol not in ("webdav", "webdavs", "scp")   # these re-send the whole file
+    assert j.status == E.DONE and j.resumed_from == (123_456 if resumable else 0)
     assert (root / "big.bin").read_bytes() == data
 
     # "ask" goes through the callback

@@ -1,7 +1,7 @@
 # BlamixFiles
 
 A free, open-source file transfer client: a modern FileZilla alternative.
-SFTP, FTP and FTPS in one portable app, a **built-in editor** that saves straight to
+SFTP, SCP, FTP/FTPS, WebDAV and S3 in one portable app, a **built-in editor** that saves straight to
 the server, and an **encrypted password vault**. Windows, macOS and Linux, plus a CLI.
 
 > 🚧 **Work in progress.** Early development, not released yet. Sister app to
@@ -15,6 +15,7 @@ the server, and an **encrypted password vault**. Windows, macOS and Linux, plus 
 | Installer | has shipped bundled offers | Clean portable zip, no bundles, no telemetry |
 | Editing a remote file | download → external editor → confirm re-upload | Opens in a tab with syntax highlighting; **Ctrl+S** saves to the server |
 | Folder sync | highlights differences; no one-click sync | Compare → preview every change → apply; saved sync profiles |
+| S3, WebDAV | paid (FileZilla Pro) | included |
 | Scripting | no scripted transfers | `blamixfiles get/put/ls/sync` with saved sites |
 
 Also: saves from the editor go to a temp file that is then renamed over the original (no
@@ -24,7 +25,9 @@ code once; transfers reuse that login.
 
 ## Features (so far)
 
-- **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), FTP, FTPS explicit and implicit
+- **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), SCP (for SSH servers without SFTP),
+  FTP, FTPS explicit and implicit, WebDAV/WebDAVS (Nextcloud, ownCloud, NAS), S3-compatible storage
+  (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …): all free, no "Pro" tier
 - **Dual-pane browser:** drag & drop between panes and from Explorer/Finder, filter, sort, rename, delete, new folder, permissions (chmod), copy path
 - **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
 - **Compare & sync:** pick two folders, see every change before it happens (upload, download,
@@ -77,8 +80,9 @@ Everything goes through `dev.sh` (Git Bash on Windows, or any bash on macOS/Linu
 | `./dev.sh release v0.1.0` | `check`, bump the version, write CHANGELOG from the commits, commit, tag, push (`--dry-run` to preview) |
 | `./dev.sh clean` | remove build output and caches |
 
-The tests start real SFTP (paramiko) and FTP/FTPS (pyftpdlib) servers in-process, so no
-daemons are needed, and include an end-to-end test that drives the actual window offscreen.
+The tests start real SFTP (paramiko), FTP/FTPS (pyftpdlib), WebDAV (wsgidav) and S3 (moto)
+servers in-process, so no daemons are needed (SCP runs against a throwaway OpenSSH `sshd` when
+one can be started), and include an end-to-end test that drives the actual window offscreen.
 `build.bat` and `run.bat` remain for people using cmd instead of Git Bash.
 
 ## How this is built

@@ -15,6 +15,7 @@ from ..core import ssh
 from ..core.backends import make_backend, open_backend
 from ..core.backends.ftp import UntrustedCertificate
 from ..core.backends.local import LocalBackend
+from ..core.backends.scp import SCPBackend
 from ..core.backends.sftp import SFTPBackend
 from ..core.errors import friendly, is_connection_error
 from ..core.vfs import Backend
@@ -160,6 +161,6 @@ class Session:
         session's SSH connection (no new login). FTP: a new login with the same
         (possibly prompted) credentials and pinned certificate."""
         b = self.backend
-        if isinstance(b, SFTPBackend) and b.connected:
-            return SFTPBackend.on_client(self.site, b.client)
+        if isinstance(b, (SFTPBackend, SCPBackend)) and b.connected:
+            return type(b).on_client(self.site, b.client)
         return open_backend(self.site)

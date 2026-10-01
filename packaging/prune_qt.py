@@ -14,6 +14,8 @@ UNUSED = ("3D|Charts|ChartsQml|DataVisualization|Graphs|Labs|Location|Multimedia
           "TextToSpeech|VirtualKeyboard|Bluetooth|Nfc|RemoteObjects|Designer|Help|UiTools|Sql|Test|"
           "SpatialAudio|HttpServer|Protobuf|Grpc|WebView|WebEngineQuick|WebSockets|NetworkAuth|"
           "Concurrent|Xml|SvgWidgets|WaylandCompositor|QuickTest|WebEngine|WebChannel|Positioning|Pdf")
+BOTO_KEEP = {"s3", "sts", "sso", "sso-oidc", "endpoints.json", "partitions.json",
+             "sdk-default-configuration.json", "_retry.json"}
 PAT = re.compile(rf"^(lib)?Qt6?({UNUSED})[A-Za-z0-9]*(\.|$)", re.I)
 
 
@@ -41,6 +43,9 @@ def main(root: Path) -> None:
             drop = True
         # PySide6 python bindings for unused modules
         if p.suffix in (".pyd", ".so") and re.match(rf"^Qt({UNUSED})\w*\.", name):
+            drop = True
+        # botocore ships the API models of every AWS service (~80 MB): keep only what S3 needs
+        if p.parent.name == "data" and p.parent.parent.name == "botocore" and name not in BOTO_KEEP:
             drop = True
         if drop:
             freed += size(p)

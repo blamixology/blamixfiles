@@ -2,3 +2,6 @@
 pytest>=8
 pyftpdlib>=1.5.9
 pyopenssl>=24
+wsgidav>=4.3
+cheroot>=10
+moto[server]>=5

@@ -323,7 +323,7 @@ class SiteDialog(_Base):
         super().__init__(parent)
         self.site = site.copy() if site else Site()
         self.setWindowTitle("Edit site" if site else "New site")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(600)
         s = self.site
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 20, 24, 18)
@@ -339,7 +339,10 @@ class SiteDialog(_Base):
         self.port.setRange(0, 65535)
         self.port.setSpecialValueText("default")
         self.port.setValue(s.port)
-        hp = QHBoxLayout()
+        self.port.setFixedWidth(120)
+        self.hp_widget = QWidget()
+        hp = QHBoxLayout(self.hp_widget)
+        hp.setContentsMargins(0, 0, 0, 0)
         hp.addWidget(self.host, 1)
         hp.addWidget(QLabel("Port"))
         hp.addWidget(self.port)
@@ -366,10 +369,11 @@ class SiteDialog(_Base):
         for col in COLORS:
             self.color.addItem("none" if not col else col, col)
         self.color.setCurrentIndex(max(0, self.color.findData(s.color)))
-        self.production = QCheckBox("Production server: red tab, confirm before deleting")
+        self.production = QCheckBox("Production: red tab, extra confirmation before deleting")
         self.production.setChecked(s.production)
         self.passive = QCheckBox("Passive mode (recommended)")
         self.passive.setChecked(s.ftp_passive)
+        self.region = QLineEdit(s.s3_region, placeholderText="e.g. eu-central-1 (empty = provider default)")
         self.parallel = QSpinBox()
         self.parallel.setRange(1, 10)
         self.parallel.setValue(s.parallel)
@@ -378,7 +382,8 @@ class SiteDialog(_Base):
 
         form.addRow("Name", self.name)
         form.addRow("Protocol", self.proto)
-        form.addRow("Host", hp)
+        form.addRow("Host", self.hp_widget)
+        form.addRow("Region", self.region)
         form.addRow("Username", self.user)
         form.addRow("Login", self.auth)
         form.addRow("Password", self.password)
@@ -419,21 +424,43 @@ class SiteDialog(_Base):
         self._tester = _Tester()
         self._tester.done.connect(self._tested)
 
+    def _label(self, field, text: str) -> None:
+        lbl = self.form.labelForField(field)
+        if lbl is not None:
+            lbl.setText(text)
+
     def _proto_changed(self, *_a, keep_auth: str | None = None) -> None:
         proto = self.proto.currentData()
-        ssh_ = proto == "sftp"
+        ssh_ = proto in ("sftp", "scp")
+        s3 = proto == "s3"
+        dav = proto in ("webdav", "webdavs")
         cur = keep_auth or self.auth.currentData()
         self.auth.blockSignals(True)
         self.auth.clear()
-        opts = ([("Password", "password"), ("Private key", "key"), ("SSH agent / default keys", "agent"),
-                 ("Ask for the password each time", "ask")] if ssh_ else
-                [("Password", "password"), ("Anonymous", "anonymous"), ("Ask for the password each time", "ask")])
+        if ssh_:
+            opts = [("Password", "password"), ("Private key", "key"), ("SSH agent / default keys", "agent"),
+                    ("Ask for the password each time", "ask")]
+        elif s3 or dav:
+            opts = [("Keys / password", "password"), ("Ask each time", "ask")]
+        else:
+            opts = [("Password", "password"), ("Anonymous", "anonymous"), ("Ask for the password each time", "ask")]
         for label, val in opts:
             self.auth.addItem(label, val)
         self.auth.setCurrentIndex(max(0, self.auth.findData(cur)))
         self.auth.blockSignals(False)
         self.port.setSpecialValueText(f"default ({DEFAULT_PORTS.get(proto, 22)})")
-        self.form.setRowVisible(self.passive, not ssh_)
+        self.form.setRowVisible(self.passive, proto.startswith("ftp"))
+        self.form.setRowVisible(self.region, s3)
+        self._label(self.hp_widget, "Endpoint" if s3 else "Host")
+        self._label(self.user, "Access key" if s3 else "Username")
+        self._label(self.password, "Secret key" if s3 else ("App password" if dav else "Password"))
+        self._label(self.remote_dir, "Bucket / folder" if s3 else ("WebDAV path" if dav else "Remote folder"))
+        self.host.setPlaceholderText(
+            "s3.amazonaws.com, s3.eu-central-003.backblazeb2.com, http://minio.lan:9000 …" if s3 else
+            "cloud.example.com" if dav else "example.com or 10.0.0.5")
+        self.remote_dir.setPlaceholderText(
+            "my-bucket/backups (empty = list all buckets)" if s3 else
+            "Nextcloud: /remote.php/dav/files/USERNAME" if dav else "login folder")
         self._auth_changed()
 
     def _auth_changed(self, *_a) -> None:
@@ -466,6 +493,7 @@ class SiteDialog(_Base):
         s.color = self.color.currentData() or ""
         s.production = self.production.isChecked()
         s.ftp_passive = self.passive.isChecked()
+        s.s3_region = self.region.text().strip()
         s.parallel = self.parallel.value()
         s.notes = self.notes.toPlainText()
         return s
@@ -487,20 +515,24 @@ class SiteDialog(_Base):
         self.test_msg.setText("Connecting …")
 
         def run():
+            from ..core import ssh
+            from ..core.backends import make_backend
+            from ..core.backends.ftp import UntrustedCertificate
             from ..core.errors import friendly
             try:
-                if s.protocol == "sftp":
-                    from ..core.ssh import test_connection
-                    msg = test_connection(s)
+                if s.is_ssh and s.protocol == "sftp":
+                    msg = ssh.test_connection(s)
                 else:
-                    from ..core.backends.ftp import FTPBackend, UntrustedCertificate
-                    b = FTPBackend(s)
+                    b = make_backend(s)
                     try:
                         b.connect()
                         b.close()
                         msg = ""
                     except UntrustedCertificate as e:
                         msg = f"OK. Self-signed certificate ({e.reason}); you'll be asked to trust it."
+                    except ssh.UnknownHostKey as e:
+                        msg = (f"OK. Host key not yet trusted ({e.key.get_name()} {ssh.fingerprint(e.key)}); "
+                               "you'll be asked on first connect.")
             except Exception as e:  # noqa: BLE001
                 msg = friendly(e)
             self._tester.done.emit(msg)

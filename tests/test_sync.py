@@ -11,7 +11,7 @@ from blamixfiles.core import sync as S
 from blamixfiles.core.backends import open_backend
 from blamixfiles.core.backends.local import LocalBackend
 from blamixfiles.models import Site
-from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer
+from servers import PASSWORD, USER, FTPTestServer, SFTPTestServer, WebDAVTestServer
 from test_backends import connect
 
 
@@ -132,7 +132,7 @@ def test_disabled_actions_are_skipped(trees):
     eng.shutdown()
 
 
-@pytest.mark.parametrize("proto", ["sftp", "ftp"])
+@pytest.mark.parametrize("proto", ["sftp", "ftp", "webdav"])
 def test_sync_against_real_server(tmp_path, proto):
     """Upload-mirror a tree to a server, then check the next compare finds nothing,
     even on FTP where upload times replace the original ones."""
@@ -142,11 +142,13 @@ def test_sync_against_real_server(tmp_path, proto):
     write(L / "css" / "app.css", "body{}")
     write(L / "img" / "logo.svg", "<svg/>")
     write(root / "www" / "stale.html", "old")
-    Server = SFTPTestServer if proto == "sftp" else FTPTestServer
+    Server = {"sftp": SFTPTestServer, "ftp": FTPTestServer, "webdav": WebDAVTestServer}[proto]
     with Server(root) as srv:
         site = Site(protocol=proto, host="127.0.0.1", port=srv.port, username=USER, password=PASSWORD)
         remote = connect(site)
         opt = S.SyncOptions(direction="upload", mirror=True, tolerance=2 if proto == "sftp" else 60)
+        if proto == "webdav":
+            remote.makedirs("/www")
         loc = S.scan(LocalBackend(), str(L), opt.excludes)
         rem = S.scan(remote, "/www", opt.excludes)
         plan = S.compare(loc, rem, str(L), "/www", opt)

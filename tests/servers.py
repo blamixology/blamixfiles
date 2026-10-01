@@ -271,3 +271,120 @@ class FTPTestServer:
 
     def __exit__(self, *exc):
         self.server.close_all()
+
+
+# ------------------------------------------------------------------ real OpenSSH (for SCP)
+class OpenSSHServer:
+    """A throwaway sshd on 127.0.0.1 with key login for the current user.
+    Needs OpenSSH installed and root (sshd's privilege separation); tests skip otherwise."""
+
+    __test__ = False
+
+    @staticmethod
+    def available() -> bool:
+        import shutil
+        return (shutil.which("sshd") is not None or os.path.exists("/usr/sbin/sshd")) \
+            and hasattr(os, "geteuid") and os.geteuid() == 0
+
+    def __init__(self, workdir: Path):
+        import getpass
+        import subprocess
+        self.dir = Path(workdir)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.user = getpass.getuser()
+        hk = self.dir / "host_ed25519"
+        self.client_key = self.dir / "client_ed25519"
+        for k in (hk, self.client_key):
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(k)], check=True)
+        (self.dir / "authorized_keys").write_text((self.dir / "client_ed25519.pub").read_text())
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        self.port = s.getsockname()[1]
+        s.close()
+        cfg = self.dir / "sshd_config"
+        cfg.write_text(
+            f"Port {self.port}\nListenAddress 127.0.0.1\nHostKey {hk}\n"
+            f"AuthorizedKeysFile {self.dir / 'authorized_keys'}\nPasswordAuthentication no\n"
+            "PubkeyAuthentication yes\nPermitRootLogin yes\nStrictModes no\nUsePAM no\n"
+            f"PidFile {self.dir / 'sshd.pid'}\n"
+            "Subsystem sftp internal-sftp\n")
+        self._cfg = cfg
+        self.proc = None
+
+    def __enter__(self):
+        import subprocess
+        import time
+        os.makedirs("/run/sshd", exist_ok=True)
+        sshd = "/usr/sbin/sshd"
+        self.proc = subprocess.Popen([sshd, "-D", "-e", "-f", str(self._cfg)],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", self.port), timeout=0.2).close()
+                return self
+            except OSError:
+                time.sleep(0.1)
+        self.proc.kill()
+        raise RuntimeError("sshd didn't start: " + self.proc.stderr.read().decode())
+
+    def __exit__(self, *exc):
+        if self.proc:
+            self.proc.terminate()
+            self.proc.wait(5)
+
+
+# ------------------------------------------------------------------ WebDAV (wsgidav + cheroot)
+class WebDAVTestServer:
+    """with WebDAVTestServer(root, tls=False) as srv: dav://tester:pw@127.0.0.1:srv.port/"""
+
+    __test__ = False
+
+    def __init__(self, root: Path, tls: bool = False, certdir: Path | None = None):
+        from cheroot import wsgi
+        from wsgidav.wsgidav_app import WsgiDAVApp
+        config = {
+            "host": "127.0.0.1", "port": 0,
+            "provider_mapping": {"/": str(root)},
+            "simple_dc": {"user_mapping": {"*": {USER: {"password": PASSWORD}}}},
+            "http_authenticator": {"accept_basic": True, "accept_digest": False, "default_to_digest": False},
+            "verbose": 0, "logging": {"enable": False, "enable_loggers": []},
+            "property_manager": True, "lock_storage": True,
+        }
+        app = WsgiDAVApp(config)
+        self.server = wsgi.Server(("127.0.0.1", 0), app, numthreads=8)
+        if tls:
+            from cheroot.ssl.builtin import BuiltinSSLAdapter
+            pem = self_signed_cert(certdir or Path(root).parent)
+            self.server.ssl_adapter = BuiltinSSLAdapter(str(pem), str(pem))
+        self.server.prepare()
+        self.port = self.server.bind_addr[1]
+
+    def __enter__(self):
+        threading.Thread(target=self.server.serve, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self.server.stop()
+
+
+# ------------------------------------------------------------------ S3 (moto)
+class S3TestServer:
+    """An in-process S3 API (moto). Site: host="http://127.0.0.1:<port>", any keys."""
+
+    __test__ = False
+
+    def __init__(self):
+        from moto.server import ThreadedMotoServer
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        self.port = s.getsockname()[1]
+        s.close()
+        self.server = ThreadedMotoServer(ip_address="127.0.0.1", port=self.port, verbose=False)
+        self.endpoint = f"http://127.0.0.1:{self.port}"
+
+    def __enter__(self):
+        self.server.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.server.stop()

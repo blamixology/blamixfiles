@@ -83,6 +83,10 @@ def _selftest(app) -> int:
     win.show()
     app.processEvents()
     import pygments.lexers  # noqa: F401  (bundled?)
+    import httpx  # noqa: F401
+    import boto3                         # the S3 model must survive packaging/pruning
+    boto3.session.Session().client("s3", region_name="us-east-1", aws_access_key_id="x",
+                                   aws_secret_access_key="y")
     print("SELFTEST OK")
     win.close()
     return 0

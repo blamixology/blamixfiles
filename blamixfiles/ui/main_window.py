@@ -207,7 +207,7 @@ class MainWindow(QMainWindow):
         sl.setSpacing(8)
         brand = QLabel("BlamixFiles", objectName="Brand")
         sl.addWidget(brand)
-        sl.addWidget(QLabel(f"v{__version__} · SFTP · FTP · FTPS", objectName="BrandSub"))
+        sl.addWidget(QLabel(f"v{__version__} · SFTP · FTP · S3 · WebDAV", objectName="BrandSub"))
         self.search = QLineEdit(placeholderText="Search sites", objectName="Search")
         self.search.textChanged.connect(self.reload_sites)
         sl.addWidget(self.search)
