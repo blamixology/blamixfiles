@@ -110,6 +110,10 @@ class LocalBackend(Backend):
     def set_mtime(self, path: str, mtime: float) -> None:
         os.utime(path, (mtime, mtime))
 
+    def checksum(self, path, algos=("sha256", "md5")):
+        from ..checksum import local_hash
+        return algos[0], local_hash(path, algos[0])
+
     def download(self, path: str, fp: BinaryIO, offset: int = 0,
                  progress: ProgressFn | None = None) -> None:
         with open(path, "rb") as f:

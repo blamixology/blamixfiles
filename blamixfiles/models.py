@@ -43,6 +43,7 @@ class Site:
     tls_verify: bool = True           # FTPS: verify the server certificate
     tls_pinned: str = ""              # FTPS/WebDAVS: sha256 of a self-signed cert the user trusted
     s3_region: str = ""               # S3: region (empty = us-east-1 / provider default)
+    jump_id: str = ""                 # SFTP/SCP: id of another saved site used as a jump host
     parallel: int = 3                 # simultaneous transfers for this site
     notes: str = ""
     last_connected: float = 0.0
@@ -139,6 +140,9 @@ class Store:
 
     def delete(self, site_id: str) -> None:
         self.sites.pop(site_id, None)
+        for s in self.sites.values():
+            if s.jump_id == site_id:
+                s.jump_id = ""
         self.sync_profiles = [p for p in self.sync_profiles if p.get("site_id") != site_id]
         self.save()
 

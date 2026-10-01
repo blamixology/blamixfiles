@@ -8,11 +8,12 @@ import os
 from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
 from PySide6.QtGui import QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView,
-                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QToolButton,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QSplitter,
+                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..core.vfs import Entry
 from .fmt import human_size, human_time
+from .folder_tree import FolderTree
 from .session import Session
 from .theme import C, icon
 
@@ -50,6 +51,33 @@ class _Item(QTreeWidgetItem):
         return a.name.lower() < b.name.lower()
 
 
+class LazyRemoteFiles(QMimeData):
+    """Drag data for server files. Inside the app the drop uses our own format (a normal
+    queued transfer). Explorer/Finder ask for file URLs only when you drop there; that's
+    when the files are downloaded to a temporary folder they can copy from."""
+
+    LIMIT = 500 * 1024 * 1024
+
+    def __init__(self, pane: "FilePane", entries: list[Entry]):
+        super().__init__()
+        self.pane = pane
+        self.entries = entries
+        self._paths: list[str] | None = None
+
+    def formats(self):  # noqa: D401
+        return super().formats() + ["text/uri-list"]
+
+    def hasFormat(self, fmt):  # noqa: N802
+        return fmt == "text/uri-list" or super().hasFormat(fmt)
+
+    def retrieveData(self, fmt, kind):  # noqa: N802
+        if fmt != "text/uri-list":
+            return super().retrieveData(fmt, kind)
+        if self._paths is None:
+            self._paths = self.pane.download_for_drag(self.entries, self.LIMIT) or []
+        return [QUrl.fromLocalFile(p) for p in self._paths]
+
+
 class FileTree(QTreeWidget):
     dropped = Signal(object, str)          # payload dict, target dir ("" = current)
 
@@ -81,11 +109,13 @@ class FileTree(QTreeWidget):
         entries = self.pane.selected()
         if not entries:
             return
-        md = QMimeData()
-        md.setData(MIME, json.dumps({"pane": id(self.pane),
-                                     "paths": [e.path for e in entries]}).encode())
+        payload = json.dumps({"pane": id(self.pane), "paths": [e.path for e in entries]}).encode()
         if self.pane.session.is_local:   # local files can also go to Explorer/Finder
+            md = QMimeData()
             md.setUrls([QUrl.fromLocalFile(e.path) for e in entries])
+        else:                            # server files: downloaded only if dropped outside the app
+            md = LazyRemoteFiles(self.pane, entries)
+        md.setData(MIME, payload)
         drag = QDrag(self)
         drag.setMimeData(md)
         drag.exec(Qt.CopyAction)
@@ -159,6 +189,15 @@ class FilePane(QWidget):
         tb("home", "Home folder", self.go_home)
         tb("refresh", "Refresh (F5)", self.refresh)
         tb("folder-plus", "New folder", self.new_folder)
+        self.bookmarks = None              # set by the window (ui.palette.Bookmarks)
+        self.bm_btn = QToolButton()
+        self.bm_btn.setIcon(icon("star"))
+        self.bm_btn.setToolTip("Bookmarks")
+        self.bm_btn.setPopupMode(QToolButton.InstantPopup)
+        self.bm_menu = QMenu(self)
+        self.bm_menu.aboutToShow.connect(self._fill_bookmarks)
+        self.bm_btn.setMenu(self.bm_menu)
+        bl.addWidget(self.bm_btn)
         self.path_edit = QLineEdit()
         self.path_edit.returnPressed.connect(lambda: self.open_dir(self.path_edit.text().strip()))
         bl.addWidget(self.path_edit, 1)
@@ -173,7 +212,15 @@ class FilePane(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.dropped.connect(self._dropped)
-        lay.addWidget(self.tree, 1)
+        self.folders = FolderTree(self)
+        self.folders.navigate.connect(lambda p: p != self.path and self.open_dir(p))
+        self.split = QSplitter(Qt.Vertical)
+        self.split.addWidget(self.folders)
+        self.split.addWidget(self.tree)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 2)
+        self.split.setSizes([180, 400])
+        lay.addWidget(self.split, 1)
         self.status = QLabel("", objectName="Hint")
         self.status.setContentsMargins(10, 4, 10, 4)
         lay.addWidget(self.status)
@@ -185,6 +232,37 @@ class FilePane(QWidget):
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(fn)
         self._start_dir = start_dir
+
+    # ------------------------------------------------------------ bookmarks
+    @property
+    def bookmark_key(self) -> str:
+        return "" if self.session.site is None else self.session.site.id
+
+    def _fill_bookmarks(self) -> None:
+        m = self.bm_menu
+        m.clear()
+        if self.bookmarks is None:
+            return
+        here = self.path
+        marks = self.bookmarks.for_site(self.bookmark_key)
+        if here and not any(b["path"] == here for b in marks):
+            m.addAction(icon("plus"), f"Bookmark {here}",
+                        lambda: self.bookmarks.add(self.bookmark_key, here, self.session.backend.basename(here) or here))
+        if marks:
+            m.addSeparator()
+            for b in marks:
+                m.addAction(icon("folder"), b["path"], lambda p=b["path"]: self.open_dir(p))
+            m.addSeparator()
+            rm = m.addMenu(icon("trash"), "Remove bookmark")
+            for b in marks:
+                rm.addAction(b["path"], lambda p=b["path"]: self.bookmarks.remove(self.bookmark_key, p))
+        elif not here:
+            m.addAction("No bookmarks yet").setEnabled(False)
+
+    def set_tree_visible(self, visible: bool) -> None:
+        self.folders.setVisible(visible)
+        if visible and self.path:
+            self.folders.show_path(self.path, self.entries)
 
     # ------------------------------------------------------------ navigation
     def start(self) -> None:
@@ -211,6 +289,11 @@ class FilePane(QWidget):
         self.path = path
         self.entries = entries
         self.path_edit.setText(path)
+        if self.folders.isVisible() or not self.isVisible():
+            try:
+                self.folders.show_path(path, entries)
+            except Exception:
+                pass
         self.tree.setSortingEnabled(False)
         self.tree.clear()
         items = [_Item(e) for e in entries]
@@ -356,6 +439,83 @@ class FilePane(QWidget):
                 one(e.path, e.is_dir and not e.is_link)
         self.session.run(apply, lambda _: self.refresh(), self._error)
 
+    def download_for_drag(self, entries: list[Entry], limit: int) -> list[str] | None:
+        """Download files/folders to a temporary folder (blocking, with a progress dialog).
+        Used when server files are dropped on Explorer/Finder/the desktop."""
+        import uuid
+
+        from PySide6.QtCore import QEventLoop
+        from PySide6.QtWidgets import QProgressDialog
+
+        from ..core.vfs import BackendError, Cancelled
+        from ..paths import data_dir
+        dest = data_dir() / "drag-out" / uuid.uuid4().hex[:8]
+        dest.mkdir(parents=True, exist_ok=True)
+        state = {"bytes": 0, "cancel": False, "name": ""}
+        dlg = QProgressDialog("Downloading for the drop …", "Cancel", 0, 0, self)
+        dlg.setWindowTitle("BlamixFiles")
+        dlg.setMinimumDuration(300)
+        dlg.canceled.connect(lambda: state.update(cancel=True))
+        loop = QEventLoop()
+        result: dict = {}
+
+        def progress(n):
+            if state["cancel"]:
+                raise Cancelled()
+            state["bytes"] += n
+            if state["bytes"] > limit:
+                raise BackendError(f"More than {human_size(limit)}: drag it to the left pane (or use "
+                                   "Download) so it goes through the transfer queue instead.")
+
+        def fetch(b):
+            from ..core.engine import safe_local_name
+            out = []
+
+            def get(e, target_dir):
+                local = os.path.join(target_dir, safe_local_name(e.name))
+                state["name"] = e.name
+                if e.is_dir:
+                    os.makedirs(local, exist_ok=True)
+                    for c in b.list(e.path):
+                        if not (c.is_dir and c.is_link):
+                            get(c, local)
+                else:
+                    with open(local, "wb") as f:
+                        b.download(e.path, f, 0, progress)
+                return local
+            for e in entries:
+                out.append(get(e, str(dest)))
+            return out
+
+        def done(paths):
+            result["paths"] = paths
+            loop.quit()
+
+        def failed(msg):
+            result["error"] = msg
+            loop.quit()
+        self.session.run(fetch, done, failed)
+        from PySide6.QtCore import QTimer
+        timer = QTimer(interval=150)
+        timer.timeout.connect(lambda: dlg.setLabelText(
+            f"Downloading {state['name']} … {human_size(state['bytes'])}"))
+        timer.start()
+        loop.exec()
+        timer.stop()
+        dlg.reset()
+        if "error" in result:
+            if result["error"] != "Cancelled":
+                self.message.emit(result["error"], True)
+            return None
+        return result.get("paths")
+
+    def open_terminal(self, path: str = "") -> None:
+        from ..core.ssh import resolve_site
+        from .terminal import open_terminal
+        err = open_terminal(self.session.site, path or self.path, resolve_site)
+        if err:
+            self.message.emit(err, True)
+
     def _menu(self, pos) -> None:
         sel = self.selected()
         m = QMenu(self)
@@ -381,4 +541,9 @@ class FilePane(QWidget):
             m.addSeparator()
         m.addAction(icon("folder-plus"), "New folder", self.new_folder)
         m.addAction(icon("refresh"), "Refresh", self.refresh)
+        site = self.session.site
+        if site is not None and site.is_ssh:
+            m.addSeparator()
+            target = sel[0].path if len(sel) == 1 and sel[0].is_dir else self.path
+            m.addAction(icon("terminal"), "Open SSH terminal here", lambda: self.open_terminal(target))
         m.exec(self.tree.viewport().mapToGlobal(pos))

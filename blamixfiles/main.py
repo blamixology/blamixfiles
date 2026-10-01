@@ -63,7 +63,25 @@ def main() -> None:
         sys.exit(0)
     win = MainWindow(holder["store"], Settings())
     win.show()
+    win.restore_tabs()
+    _clean_drag_cache()
     sys.exit(app.exec())
+
+
+def _clean_drag_cache() -> None:
+    """Files downloaded for drops on the desktop: the OS has copied them long ago."""
+    import shutil
+    import time
+
+    from .paths import data_dir
+    d = data_dir() / "drag-out"
+    if d.is_dir():
+        for p in d.iterdir():
+            try:
+                if time.time() - p.stat().st_mtime > 3600:
+                    shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
 
 
 def _selftest(app) -> int:

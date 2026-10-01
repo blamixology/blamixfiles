@@ -75,6 +75,10 @@ QTreeWidget#Files::item {{ border-radius: 0; padding: 3px 2px; }}
 QTreeWidget#Files::item:selected {{ background: {C['hover']}; }}
 QTreeWidget#Files::item:selected:active {{ background: #2a3354; }}
 QTreeWidget#Files {{ background: transparent; }}
+QTreeWidget#Folders {{ background: {C['sidebar']}; border-bottom: 1px solid {C['border']}; show-decoration-selected: 0; }}
+QTreeWidget#Folders::item {{ padding: 2px; border-radius: 6px; }}
+QTreeWidget#Folders::item:selected {{ background: #2a3354; color: {C['text']}; }}
+QTreeWidget#Folders::branch:selected, QTreeWidget#Folders::branch:hover {{ background: transparent; }}
 QPlainTextEdit#Code {{ background: {C['bg']}; border: none; border-radius: 0; padding: 0; selection-background-color: #2c3a5c; }}
 #FindBar {{ background: {C['surface']}; border-top: 1px solid {C['border']}; }}
 #Prod {{ color: {C['danger']}; font-weight: 600; }}

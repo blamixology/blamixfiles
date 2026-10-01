@@ -15,7 +15,8 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Queue survives restarts (saved to disk) |
 | ✅ | Speed limits (upload/download, also `--limit` in the CLI) |
 | ✅ | Portable builds for Windows, macOS and Linux from CI, `./dev.sh release` |
-| 🗓 | Windows MSI installer, code signing |
+| ✅ | Windows MSI installer (all users or just me) |
+| 🗓 | Code signing (Windows, macOS) |
 
 ## Next
 
@@ -23,14 +24,15 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 |---|---|
 | ✅ | Folder compare and sync with a preview of every change (one-way, mirror, two-way) |
 | ✅ | Saved sync profiles, `blamixfiles sync <profile>` |
-| 🗓 | Checksum verification after transfers |
+| ✅ | Checksum verification after transfers; sync by content |
 | ✅ | S3-compatible storage (AWS, MinIO, Backblaze B2, Wasabi, Hetzner, R2) |
 | ✅ | WebDAV (Nextcloud, ownCloud, NAS) |
 | ✅ | SCP |
 | 🗓 | Nextcloud chunked uploads for very large files; resumable S3 multipart uploads |
-| 🗓 | Jump hosts, "Open in BlamixShell" |
-| 🗓 | Drag files from the remote pane to the desktop |
-| 🗓 | Bookmarks, command palette, tab restore |
+| ✅ | Jump hosts, "Open SSH terminal here" |
+| ✅ | Drag files from the remote pane to the desktop; folder trees |
+| ✅ | Bookmarks, command palette, tab restore |
+| 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line) |
 
 ## Later / maybe
 

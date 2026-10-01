@@ -24,6 +24,25 @@ def host_key() -> paramiko.PKey:
 
 
 # ------------------------------------------------------------------ SFTP
+def _pump(a, b) -> None:
+    def one(src, dst):
+        try:
+            while True:
+                d = src.recv(65536)
+                if not d:
+                    break
+                dst.sendall(d)
+        except Exception:
+            pass
+        for obj in (src, dst):
+            try:
+                obj.close()
+            except Exception:
+                pass
+    threading.Thread(target=one, args=(a, b), daemon=True).start()
+    threading.Thread(target=one, args=(b, a), daemon=True).start()
+
+
 class _Handle(SFTPHandle):
     def stat(self):
         try:
@@ -156,6 +175,22 @@ class _StubSFTP(SFTPServerInterface):
 
 
 class _SSHIface(paramiko.ServerInterface):
+    """Password login, sessions (SFTP) and direct-tcpip (so it can act as a jump host)."""
+
+    def __init__(self):
+        self.direct: dict[int, socket.socket] = {}
+        self.forwarded: list[tuple[str, int]] = []
+
+    def check_channel_direct_tcpip_request(self, chanid, origin, destination):
+        try:
+            sock = socket.create_connection(destination, timeout=5)
+        except OSError:
+            return paramiko.OPEN_FAILED_CONNECT_FAILED
+        sock.settimeout(None)
+        self.direct[chanid] = sock
+        self.forwarded.append(destination)
+        return paramiko.OPEN_SUCCEEDED
+
     def get_allowed_auths(self, username):
         return "password"
 
@@ -177,6 +212,11 @@ class SFTPTestServer:
         self._sock = socket.create_server(("127.0.0.1", 0))
         self.port = self._sock.getsockname()[1]
         self._transports: list[paramiko.Transport] = []
+        self.ifaces: list[_SSHIface] = []
+
+    @property
+    def forwarded(self) -> list[tuple[str, int]]:
+        return [d for i in self.ifaces for d in i.forwarded]
 
     def __enter__(self):
         threading.Thread(target=self._serve, daemon=True).start()
@@ -201,20 +241,26 @@ class SFTPTestServer:
             t = paramiko.Transport(conn)
             t.add_server_key(host_key())
             t.set_subsystem_handler("sftp", SFTPServer, Stub)
+            iface = _SSHIface()
+            self.ifaces.append(iface)
             try:
-                t.start_server(server=_SSHIface())
+                t.start_server(server=iface)
             except Exception:
                 continue
             self._transports.append(t)
-            threading.Thread(target=self._accept_channels, args=(t,), daemon=True).start()
+            threading.Thread(target=self._accept_channels, args=(t, iface), daemon=True).start()
 
     @staticmethod
-    def _accept_channels(t):
+    def _accept_channels(t, iface):
         keep = []        # an unreferenced paramiko Channel closes itself when collected
         while t.is_active():
             ch = t.accept(1)
-            if ch is not None:
-                keep.append(ch)
+            if ch is None:
+                continue
+            keep.append(ch)
+            sock = iface.direct.pop(ch.get_id(), None)
+            if sock is not None:
+                _pump(sock, ch)
 
 
 # ------------------------------------------------------------------ FTP / FTPS
@@ -384,6 +430,8 @@ class S3TestServer:
 
     def __enter__(self):
         self.server.start()
+        import httpx
+        httpx.post(self.endpoint + "/moto-api/reset")      # moto keeps buckets per process
         return self
 
     def __exit__(self, *exc):

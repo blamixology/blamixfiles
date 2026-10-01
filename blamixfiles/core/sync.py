@@ -37,7 +37,7 @@ DEFAULT_EXCLUDES = [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db", "desktop.in
 class SyncOptions:
     direction: str = UPLOAD          # upload (local -> server) | download | both
     mirror: bool = False             # also delete what doesn't exist on the source side
-    compare: str = "mtime"           # mtime: size + modified time | size: size only
+    compare: str = "mtime"           # mtime: size + modified time | size: size only | checksum: content
     tolerance: float = 2.0           # seconds of timestamp difference still counted as "same"
     excludes: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
 
@@ -70,6 +70,8 @@ class Plan:
     options: SyncOptions
     actions: list[Action] = field(default_factory=list)
     unchanged: int = 0
+    to_check: list = field(default_factory=list)     # same-size pairs to hash (checksum mode)
+    unverifiable: int = 0                            # the server couldn't hash these
     scanned_local: int = 0
     scanned_remote: int = 0
 
@@ -86,7 +88,10 @@ class Plan:
     def summary(self) -> str:
         c = self.counts()
         parts = [f"{n} {ACTION_LABELS[k].lower()}" for k, n in c.items()]
-        return (", ".join(parts) or "Nothing to do") + f"; {self.unchanged} unchanged"
+        text = (", ".join(parts) or "Nothing to do") + f"; {self.unchanged} unchanged"
+        if self.unverifiable:
+            text += f" ({self.unverifiable} compared by size only: the server can't compute checksums)"
+        return text
 
 
 # ------------------------------------------------------------------ scanning
@@ -148,6 +153,10 @@ def compare(local: dict[str, Entry], remote: dict[str, Entry], local_root: str, 
                 continue
             if lo.is_dir:
                 continue
+            if opt.compare == "checksum" and lo.size == re_.size:
+                plan.unchanged += 1               # until the hashes say otherwise
+                plan.to_check.append((rel, lo, re_))
+                continue
             by_time = opt.compare == "mtime"
             local_newer = by_time and lo.mtime > re_.mtime + tol
             remote_newer = by_time and re_.mtime > lo.mtime + tol
@@ -180,6 +189,41 @@ def compare(local: dict[str, Entry], remote: dict[str, Entry], local_root: str, 
             elif opt.mirror:
                 acts.append(Action(DELETE_REMOTE, rel, re_.is_dir, None, re_, "not here"))
     plan.actions = _collapse_deletes(acts)
+    return plan
+
+
+def resolve_checksums(plan: Plan, local: Backend, remote: Backend,
+                      progress: ProgressFn | None = None,
+                      should_stop: Callable[[], bool] = lambda: False) -> Plan:
+    """Checksum mode: hash the same-size pairs on both sides and add actions for the
+    ones whose content differs."""
+    from .checksum import local_hash
+    opt = plan.options
+    for i, (rel, lo, re_) in enumerate(plan.to_check):
+        if should_stop():
+            raise Cancelled()
+        if progress:
+            progress(f"checksums {i + 1}/{len(plan.to_check)}: {rel}")
+        r = remote.checksum(re_.path)
+        if r is None:
+            plan.unverifiable += 1
+            continue
+        algo, rh = r
+        if local_hash(lo.path, algo, should_stop) == rh.lower():
+            continue
+        plan.unchanged -= 1
+        if opt.direction == UPLOAD:
+            kind = UPLOAD
+        elif opt.direction == DOWNLOAD:
+            kind = DOWNLOAD
+        elif lo.mtime > re_.mtime + opt.tolerance:
+            kind = UPLOAD
+        elif re_.mtime > lo.mtime + opt.tolerance:
+            kind = DOWNLOAD
+        else:
+            kind = CONFLICT
+        plan.actions.append(Action(kind, rel, False, lo, re_, f"content differs ({algo})"))
+    plan.to_check = []
     return plan
 
 

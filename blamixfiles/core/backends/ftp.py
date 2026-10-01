@@ -254,6 +254,10 @@ class FTPBackend(Backend):
     def connected(self) -> bool:
         return self.ftp is not None and self.ftp.sock is not None
 
+    def keepalive(self) -> None:
+        if self.ftp is not None:
+            self.ftp.voidcmd("NOOP")
+
     def home(self) -> str:
         try:
             return self.ftp.pwd() or "/"
@@ -356,6 +360,29 @@ class FTPBackend(Backend):
                 self.ftp.sendcmd(f"MFMT {stamp} {path}")
             except ftplib.Error:
                 pass
+
+    def checksum(self, path, algos=("sha256", "md5")):
+        """FTP servers that offer HASH (draft-bryan-ftpext-hash) or XSHA256/XMD5."""
+        names = {"sha256": "SHA-256", "md5": "MD5"}
+        for algo in algos:
+            try:
+                if "HASH" in self.features:
+                    self.ftp.sendcmd(f"OPTS HASH {names[algo]}")
+                    resp = self.ftp.sendcmd(f"HASH {path}")          # 213 SHA-256 0-123 <hex> name
+                    parts = resp.split()
+                    for word in parts[1:]:
+                        w = word.lower()
+                        if len(w) in (32, 64) and all(c in "0123456789abcdef" for c in w):
+                            return algo, w
+                cmd = {"sha256": "XSHA256", "md5": "XMD5"}[algo]
+                if cmd in self.features:
+                    resp = self.ftp.sendcmd(f"{cmd} {path}")
+                    w = resp.split()[-1].lower()
+                    if len(w) in (32, 64):
+                        return algo, w
+            except ftplib.Error:
+                continue
+        return None
 
     # ---- data. A failed or cancelled transfer leaves the control connection in an
     # unknown state, so we drop it; the caller reconnects for the next operation.

@@ -14,6 +14,10 @@ DEFAULTS = {
     "last_local_dir": "",
     "limit_up_kb": 0,          # speed limits in KB/s, 0 = unlimited
     "limit_down_kb": 0,
+    "verify_checksums": False, # compare SHA-256/MD5 after each transfer
+    "show_tree": True,         # folder tree above each file list
+    "restore_tabs": True,      # reopen site tabs (and their folders) on start
+    "open_tabs": [],
 }
 
 

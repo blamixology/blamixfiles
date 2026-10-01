@@ -70,6 +70,7 @@ class SyncDialog(QDialog):
         self.compare_by = QComboBox()
         self.compare_by.addItem("size + modified time", "mtime")
         self.compare_by.addItem("size only", "size")
+        self.compare_by.addItem("content checksum (slow)", "checksum")
         self.compare_by.setCurrentIndex(self.compare_by.findData(opt.compare))
         opts.addWidget(self.compare_by)
         lay.addLayout(opts)
@@ -188,7 +189,10 @@ class SyncDialog(QDialog):
             t.join()
             if "e" in local_result:
                 raise local_result["e"]
-            return S.compare(local_result["v"], remote, local_root, remote_root, opt)
+            plan = S.compare(local_result["v"], remote, local_root, remote_root, opt)
+            if plan.to_check:
+                S.resolve_checksums(plan, LocalBackend(), b, progress("both sides"), stop)
+            return plan
         self.tab.remote_session.run(scan_remote, self._compared, self._failed)
 
     def _failed(self, msg: str) -> None:

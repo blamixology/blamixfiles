@@ -150,7 +150,19 @@ class QueueView(QWidget):
             custom = sub.addAction("Custom…")
             custom.triggered.connect(lambda _=False, d=direction: self._custom_limit(d))
             sub.aboutToShow.connect(lambda sub=sub, d=direction: self._check_current(sub, d))
+        m.addSeparator()
+        self.verify_action = m.addAction(icon("shield"), "Verify checksums after each transfer")
+        self.verify_action.setCheckable(True)
+        self.verify_action.setChecked(self.engine.verify)
+        self.verify_action.setToolTip("Compare SHA-256/MD5 on both sides (needs a shell, HASH command or S3 ETag)")
+        self.verify_action.toggled.connect(self.set_verify)
         return m
+
+    def set_verify(self, on: bool) -> None:
+        self.engine.verify = on
+        if self.settings is not None:
+            self.settings["verify_checksums"] = on
+            self.settings.save()
 
     def _check_current(self, sub: QMenu, direction: str) -> None:
         current = self.engine.limits[direction].rate // 1024
@@ -212,6 +224,9 @@ class QueueView(QWidget):
         it.setData(3, Qt.UserRole + 1, STATUS_COLOR.get(job.status, C["accent"]))
         it.setText(4, human_speed(job.speed) if job.status == E.RUNNING else "")
         status = job.error or STATUS_TEXT.get(job.status, job.status)
+        if job.status == E.DONE and job.verified:
+            status = (f"Done ✓ {job.verified.upper()} verified" if job.verified not in ("unsupported",)
+                      else "Done (server can't checksum)")
         if job.status == E.RUNNING and job.error:
             status = job.error
         it.setText(5, status)

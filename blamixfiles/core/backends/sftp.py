@@ -130,6 +130,32 @@ class SFTPBackend(Backend):
     def set_mtime(self, path: str, mtime: float) -> None:
         self.sftp.utime(path, (mtime, mtime))
 
+    def _exec(self, command: str) -> tuple[int, str, str]:
+        chan = self.client.get_transport().open_session(timeout=15)
+        chan.settimeout(300)
+        chan.exec_command(command)
+        out = chan.makefile("rb").read().decode("utf-8", "replace")
+        err = chan.makefile_stderr("rb").read().decode("utf-8", "replace")
+        code = chan.recv_exit_status()
+        chan.close()
+        return code, out, err
+
+    def checksum(self, path, algos=("sha256", "md5")):
+        """Runs sha256sum/md5sum on the server (most Linux/BSD hosts). Servers that only
+        allow SFTP (no shell) can't do this: None."""
+        from ..checksum import remote_hash_via_shell
+        if getattr(self, "_no_exec", False):
+            return None
+        for algo in algos:
+            try:
+                h = remote_hash_via_shell(self._exec, path, algo)
+            except Exception:
+                self._no_exec = True
+                return None
+            if h:
+                return algo, h
+        return None
+
     def download(self, path: str, fp: BinaryIO, offset: int = 0,
                  progress: ProgressFn | None = None) -> None:
         with self.sftp.open(path, "rb", bufsize=BLOCK) as f:

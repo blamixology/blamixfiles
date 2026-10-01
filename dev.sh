@@ -8,6 +8,7 @@
 #   ./dev.sh check              tests + lint + app selftest: run before you push
 #   ./dev.sh ship               check, then pull --rebase and push (no merge commits)
 #   ./dev.sh build              portable app in dist/BlamixFiles (+ a .zip / .tar.gz)
+#   ./dev.sh msi [--test]       Windows installer from dist/BlamixFiles (needs .NET SDK 8+)
 #   ./dev.sh release v0.1.0     check, bump version, CHANGELOG, commit, tag, push
 #                               (--dry-run to preview, nothing is changed)
 #   ./dev.sh clean              remove build output and caches (keeps .venv)
@@ -182,6 +183,14 @@ cmd_build() {
   fi
 }
 
+cmd_msi() {
+  [ "$WIN" = 1 ] || die "The MSI installer is built on Windows."
+  [ -f dist/BlamixFiles/BlamixFiles.exe ] || cmd_build
+  local args=()
+  [ "${1:-}" = "--test" ] && args=(-Test)
+  powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/build_msi.ps1 ${args[@]+"${args[@]}"}
+}
+
 cmd_release() {
   local dry=0 tag=""
   for a in "$@"; do
@@ -246,12 +255,12 @@ cmd_clean() {
   ok "Clean"
 }
 
-cmd_help() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+cmd_help() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
 cmd="${1:-help}"
 shift || true
 case "$cmd" in
-  setup|run|cli|test|check|ship|build|release|clean|help) "cmd_$cmd" "$@" ;;
+  setup|run|cli|test|check|ship|build|msi|release|clean|help) "cmd_$cmd" "$@" ;;
   -h|--help) cmd_help ;;
   *) die "Unknown command '$cmd'. Try: ./dev.sh help" ;;
 esac

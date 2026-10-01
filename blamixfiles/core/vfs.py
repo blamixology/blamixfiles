@@ -75,6 +75,9 @@ class Backend:
     def home(self) -> str:
         return "/"
 
+    def keepalive(self) -> None:
+        """Called every minute while idle (FTP servers drop idle logins with 421)."""
+
     # ---- path helpers (POSIX by default; LocalBackend overrides)
     def join(self, *parts: str) -> str:
         return posixpath.join(*parts)
@@ -142,6 +145,10 @@ class Backend:
 
     def set_mtime(self, path: str, mtime: float) -> None:
         pass
+
+    def checksum(self, path: str, algos: tuple[str, ...] = ("sha256", "md5")) -> tuple[str, str] | None:
+        """(algo, hex digest) computed on the server, or None if it can't."""
+        return None
 
     # ---- data
     def download(self, path: str, fp: BinaryIO, offset: int = 0,

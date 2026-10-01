@@ -63,6 +63,19 @@ class Session:
                 return fn(self._ensure())
         self.worker.submit(job, ok, (lambda e: err(friendly(e))) if err else None)
 
+    def keepalive(self) -> None:
+        """Poke an idle connection so the server doesn't drop it (FTP NOOP)."""
+        b = self.backend
+        if self.is_local or b is None or self.worker.busy or not b.connected:
+            return
+
+        def poke():
+            try:
+                b.keepalive()
+            except Exception:
+                self._drop()      # it's gone: the next action reconnects quietly
+        self.worker.submit(poke)
+
     def close(self) -> None:
         self._closed = True
         self.worker.submit(self._drop)

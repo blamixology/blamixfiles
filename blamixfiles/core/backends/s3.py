@@ -225,6 +225,20 @@ class S3Backend(Backend):
         self._call(self.client.copy_object, src, Bucket=db, Key=dk, CopySource={"Bucket": sb, "Key": sk})
         self._call(self.client.delete_object, src, Bucket=sb, Key=sk)
 
+    def checksum(self, path, algos=("sha256", "md5")):
+        """S3's ETag is the MD5 of the content for objects uploaded in one part (not for
+        multipart uploads or SSE-KMS); anything else: None."""
+        if "md5" not in algos:
+            return None
+        bucket, key = self._split(path)
+        try:
+            etag = self.client.head_object(Bucket=bucket, Key=key).get("ETag", "").strip('"')
+        except Exception:  # noqa: BLE001
+            return None
+        if len(etag) == 32 and "-" not in etag:
+            return "md5", etag.lower()
+        return None
+
     # ------------------------------------------------------------ data
     def download(self, path: str, fp: BinaryIO, offset: int = 0,
                  progress: ProgressFn | None = None) -> None:

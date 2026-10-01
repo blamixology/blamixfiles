@@ -76,6 +76,7 @@ class Job:
     cancel_flag: bool = False
     key: str = field(default_factory=lambda: uuid.uuid4().hex)   # stable id for the saved queue
     make_parents: bool = False    # create missing parent folders first (sync jobs)
+    verified: str = ""            # "sha256"/"md5" when checked, "unsupported", or "" (not checked)
 
     @property
     def name(self) -> str:
@@ -100,11 +101,13 @@ class TransferEngine:
     def __init__(self, connector: Connector, workers: int = 3,
                  on_change: Callable[[Job], None] | None = None,
                  policy: str = "overwrite", ask: OverwriteAsk | None = None,
-                 preserve_mtime: bool = True, store=None, limit_up: int = 0, limit_down: int = 0):
+                 preserve_mtime: bool = True, store=None, limit_up: int = 0, limit_down: int = 0,
+                 verify: bool = False):
         """store: optional QueueStore (unfinished jobs survive restarts).
         limit_up / limit_down: bytes per second for all transfers together (0 = no limit)."""
         self.connector = connector
         self.store = store
+        self.verify = verify          # compare checksums after each file (when the server can)
         self.limits = {"upload": TokenBucket(limit_up), "download": TokenBucket(limit_down)}
         self.on_change = on_change or (lambda j: None)
         self.policy = policy
@@ -312,6 +315,8 @@ class TransferEngine:
                 else:
                     self._download_file(job, b)
                 job.error = ""
+                if self.verify and job.status == DONE and not job.is_dir:
+                    self._verify(job, b)
                 return
             except Cancelled:
                 job.status = CANCELLED
@@ -398,6 +403,25 @@ class TransferEngine:
             bucket.consume(n, lambda: job.cancel_flag)
             self._emit(job)
         return cb
+
+    def _verify(self, job: Job, b: Backend) -> None:
+        from .checksum import local_hash
+        remote_path, local = (job.dst, job.src) if job.kind == "upload" else (job.src, job.dst)
+        job.error = "verifying…"
+        self._emit(job, force=True)
+        result = b.checksum(remote_path)
+        if result is None:
+            job.verified, job.error = "unsupported", ""
+            return
+        algo, remote_h = result
+        local_h = local_hash(local, algo, lambda: job.cancel_flag)
+        if local_h.lower() == remote_h.lower():
+            job.verified, job.error = algo, ""
+        else:
+            job.verified = "mismatch"
+            job.status = FAILED
+            job.error = (f"Checksum mismatch ({algo}): the copy differs from the original. "
+                         "Retry the transfer.")
 
     def _upload_file(self, job: Job, b: Backend) -> None:
         st = os.stat(job.src)

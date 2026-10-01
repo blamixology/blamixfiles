@@ -149,6 +149,13 @@ class _Client(paramiko.SSHClient):
     prompts through a callback (paramiko's own falls back to stdin input())."""
 
     interactive: InteractiveHandler | None = None
+    jump: "paramiko.SSHClient | None" = None
+
+    def close(self):
+        super().close()
+        if self.jump is not None:
+            self.jump.close()
+            self.jump = None
 
     def _auth(self, username, password, pkey, key_filenames, allow_agent,
               look_for_keys, passphrase):  # noqa: PLR0912 (it's a sequence of fallbacks)
@@ -263,18 +270,53 @@ def _connect_kwargs(site) -> dict:
     return kw
 
 
+# Jump hosts reference another saved site by id. The app (GUI or CLI) registers how to
+# look sites up, so backends don't need to know about the vault.
+_resolve_site: Callable[[str], object | None] = lambda site_id: None
+
+
+def set_site_resolver(fn: Callable[[str], object | None]) -> None:
+    global _resolve_site
+    _resolve_site = fn
+
+
+def resolve_site(site_id: str):
+    return _resolve_site(site_id) if site_id else None
+
+
 def open_client(site, interactive: InteractiveHandler | None = None,
-                log: Callable[[str], None] = lambda m: None) -> paramiko.SSHClient:
-    """Connect and authenticate. Raises UnknownHostKey / ChangedHostKey so the caller
-    can ask the user, then retry after trust_host_key()."""
+                log: Callable[[str], None] = lambda m: None, _depth: int = 0) -> paramiko.SSHClient:
+    """Connect and authenticate, through jump hosts if the site has one (chains work:
+    a jump host can have its own jump host). Raises UnknownHostKey / ChangedHostKey so
+    the caller can ask the user, then retry after trust_host_key()."""
+    if _depth > 4:
+        raise AuthConfigError("Jump host chain is too long (does it loop back?)")
+    sock = None
+    jump_client = None
+    jump_id = getattr(site, "jump_id", "")
+    if jump_id:
+        jump = _resolve_site(jump_id)
+        if jump is None:
+            raise AuthConfigError("The jump host configured for this site no longer exists")
+        log(f"via jump host {jump.label} …")
+        jump_client = open_client(jump, interactive, log, _depth + 1)
+        try:
+            sock = jump_client.get_transport().open_channel(
+                "direct-tcpip", (site.host, int(site.effective_port)), ("127.0.0.1", 0), timeout=15)
+        except Exception as e:
+            jump_client.close()
+            raise paramiko.SSHException(
+                f"The jump host couldn't reach {site.host}:{site.effective_port} ({e})") from None
+
     client = _Client()
     client.interactive = interactive
+    client.jump = jump_client                    # closed together with this client
     client._host_keys = load_known_hosts()       # read-only view; saved via trust_host_key
     client.set_missing_host_key_policy(_AskPolicy())
     port = site.effective_port
     log(f"connecting to {site.host}:{port} …")
     try:
-        client.connect(site.host, port=port, **_connect_kwargs(site))
+        client.connect(site.host, port=port, sock=sock, **_connect_kwargs(site))
     except paramiko.BadHostKeyException as e:
         client.close()
         raise ChangedHostKey(host_id(site.host, port), e.key, e.expected_key) from None

@@ -94,8 +94,15 @@ class SiteTab(QWidget):
             pane.upload_paths.connect(lambda paths, target: self.upload(paths, target))
             pane.edit.connect(lambda e, p: win.open_editor(p.session, e))
             pane.message.connect(win.show_message)
+        self.local.bookmarks = self.remote.bookmarks = win.bookmarks
+        tree = bool(win.settings["show_tree"])
+        self.local.set_tree_visible(tree)
+        self.remote.set_tree_visible(tree)
         self.local.start()
         self.remote.start()
+        self._keepalive = QTimer(self, interval=60_000)
+        self._keepalive.timeout.connect(self.remote_session.keepalive)
+        self._keepalive.start()
 
     def log(self, msg: str, error: bool = False) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -118,6 +125,7 @@ class SiteTab(QWidget):
             self.win.engine.upload(self.remote_session.site, p, target, remote_join=join)
 
     def close(self) -> None:
+        self._keepalive.stop()
         self.win.settings["last_local_dir"] = self.local.path
         self.local_session.close()
         self.remote_session.close()
@@ -130,6 +138,10 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.setWindowTitle("BlamixFiles")
         self.resize(1320, 820)
+        from .palette import Bookmarks
+        self.bookmarks = Bookmarks(store)
+        from ..core.ssh import set_site_resolver
+        set_site_resolver(lambda sid: self.store.sites.get(sid))      # jump hosts
         self.queue_store = QueueStore(data_dir() / "queue.db", keep_site=lambda sid: sid in self.store.sites)
         self.engine = E.TransferEngine(self._connector, workers=int(settings["workers"]),
                                        on_change=lambda j: on_ui(lambda: self._job_changed(j)),
@@ -137,7 +149,8 @@ class MainWindow(QMainWindow):
                                        preserve_mtime=bool(settings["preserve_mtime"]),
                                        store=self.queue_store,
                                        limit_up=int(settings["limit_up_kb"]) * 1024,
-                                       limit_down=int(settings["limit_down_kb"]) * 1024)
+                                       limit_down=int(settings["limit_down_kb"]) * 1024,
+                                       verify=bool(settings["verify_checksums"]))
         self._refresh_timer = QTimer(singleShot=True, interval=400)
         self._refresh_timer.timeout.connect(self._refresh_targets)
         self._refresh_dirs: set[tuple[int, str]] = set()
@@ -207,7 +220,7 @@ class MainWindow(QMainWindow):
         sl.setSpacing(8)
         brand = QLabel("BlamixFiles", objectName="Brand")
         sl.addWidget(brand)
-        sl.addWidget(QLabel(f"v{__version__} · SFTP · FTP · S3 · WebDAV", objectName="BrandSub"))
+        sl.addWidget(QLabel(f"v{__version__} · SFTP · FTP · S3 · DAV", objectName="BrandSub"))
         self.search = QLineEdit(placeholderText="Search sites", objectName="Search")
         self.search.textChanged.connect(self.reload_sites)
         sl.addWidget(self.search)
@@ -272,6 +285,7 @@ class MainWindow(QMainWindow):
             return a
         act(f, "New site…", self.new_site, "Ctrl+N", "plus")
         act(f, "Quick connect", lambda: (self.quick.setFocus(), self.quick.selectAll()), "Ctrl+L", "bolt")
+        act(f, "Command palette…", self.show_palette, "Ctrl+K", "search")
         f.addSeparator()
         act(f, "Import from FileZilla…", self.import_filezilla, None, "import")
         f.addSeparator()
@@ -281,12 +295,85 @@ class MainWindow(QMainWindow):
         self.reload_profiles()
         v = mb.addMenu("&View")
         act(v, "Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "Ctrl+J")
+        act(v, "Show/hide folder trees", self.toggle_trees, "Ctrl+T")
         h = mb.addMenu("&Help")
         act(h, "BlamixFiles on GitHub", lambda: webbrowser.open(GITHUB), None, "github")
         act(h, "Report a problem", lambda: webbrowser.open(GITHUB + "/issues"), None, "help")
         act(h, "☕ Buy me a coffee", lambda: webbrowser.open(KOFI), None, "coffee")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    def show_palette(self) -> None:
+        from .palette import CommandPalette
+        entries = []
+        for site in sorted(self.store.sites.values(), key=lambda x: x.label.lower()):
+            entries.append((site.label, site.address + (f"  ·  {site.group}" if site.group else ""),
+                            lambda s=site: self.open_site(s), "server"))
+        for b in self.store.bookmarks:
+            site = self.store.sites.get(b["site_id"]) if b["site_id"] else None
+            if b["site_id"] and site is None:
+                continue
+            where = site.label if site else "This computer"
+            entries.append((b["path"], f"bookmark · {where}", lambda b=b: self.open_bookmark(b), "star"))
+        for p in self.store.sync_profiles:
+            if p["site_id"] in self.store.sites:
+                entries.append((p["name"], "sync profile", lambda p=p: self.run_profile(p), "sync"))
+        actions = [("New site", self.new_site, "plus"), ("Compare & sync current tab", self.open_sync, "sync"),
+                   ("Import from FileZilla", self.import_filezilla, "import"),
+                   ("Show/hide folder trees", self.toggle_trees, "folder"),
+                   ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
+                   ("Pause/resume transfers", self.queue._toggle_pause, "pause"),
+                   ("Retry failed transfers", lambda: self.engine.retry(), "retry"),
+                   ("Buy me a coffee", lambda: webbrowser.open(KOFI), "coffee")]
+        entries += [(t, "action", cb, ic) for t, cb, ic in actions]
+        pal = CommandPalette(entries, self, anchor=self.quick)
+        pal.quick_connect = lambda text: (self.quick.setText(text), self.quick_connect())
+        pal.exec()
+
+    def open_bookmark(self, b: dict) -> None:
+        if not b["site_id"]:                      # a local folder: current site tab's left pane
+            tab = self.tabs.currentWidget()
+            if isinstance(tab, SiteTab):
+                tab.local.open_dir(b["path"])
+            else:
+                self.show_message("Open a site tab first: local bookmarks open in its left pane.", True)
+            return
+        site = self.store.sites.get(b["site_id"])
+        tab = next((t for t in self.site_tabs() if t.remote_session.site.id == b["site_id"]), None)
+        if tab is None:
+            self.open_site(site, b["path"])
+        else:
+            self.tabs.setCurrentWidget(tab)
+            tab.remote.open_dir(b["path"])
+
+    def toggle_trees(self) -> None:
+        show = not bool(self.settings["show_tree"])
+        self.settings["show_tree"] = show
+        self.settings.save()
+        for t in self.site_tabs():
+            t.local.set_tree_visible(show)
+            t.remote.set_tree_visible(show)
+
+    # ------------------------------------------------------------ restore tabs
+    def _save_open_tabs(self) -> None:
+        tabs = []
+        for t in self.site_tabs():
+            sid = t.remote_session.site.id
+            if sid in self.store.sites:                # quick-connect tabs aren't saved
+                tabs.append({"site_id": sid, "remote": t.remote.path, "local": t.local.path})
+        self.settings["open_tabs"] = tabs
+
+    def restore_tabs(self) -> None:
+        if not self.settings["restore_tabs"]:
+            return
+        for t in self.settings["open_tabs"] or []:
+            site = self.store.sites.get(t.get("site_id"))
+            if site is None:
+                continue
+            s = site.copy()
+            if t.get("local"):
+                s.local_dir = t["local"]
+            self.open_site(s, t.get("remote", ""))
 
     # ------------------------------------------------------------ sync
     def reload_profiles(self) -> None:
@@ -384,13 +471,13 @@ class MainWindow(QMainWindow):
         m.exec(self.site_tree.viewport().mapToGlobal(pos))
 
     def new_site(self) -> None:
-        dlg = SiteDialog(None, self.store.all_groups(), self)
+        dlg = SiteDialog(None, self.store.all_groups(), self, sites=list(self.store.sites.values()))
         if dlg.exec():
             self.store.upsert(dlg.site)
             self.reload_sites()
 
     def edit_site(self, s: Site) -> None:
-        dlg = SiteDialog(s, self.store.all_groups(), self)
+        dlg = SiteDialog(s, self.store.all_groups(), self, sites=list(self.store.sites.values()))
         if dlg.exec():
             self.store.upsert(dlg.site)
             self.reload_sites()
@@ -614,6 +701,7 @@ class MainWindow(QMainWindow):
                 return
         self.settings["window_geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         self.settings["policy"] = self.engine.policy
+        self._save_open_tabs()
         # unfinished transfers stay in the saved queue: offered again on the next start
         self.engine.store = None
         for t in self.site_tabs():

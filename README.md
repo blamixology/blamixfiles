@@ -28,7 +28,14 @@ code once; transfers reuse that login.
 - **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), SCP (for SSH servers without SFTP),
   FTP, FTPS explicit and implicit, WebDAV/WebDAVS (Nextcloud, ownCloud, NAS), S3-compatible storage
   (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …): all free, no "Pro" tier
-- **Dual-pane browser:** drag & drop between panes and from Explorer/Finder, filter, sort, rename, delete, new folder, permissions (chmod), copy path
+- **Dual-pane browser:** local on the left, server on the right, each with a folder tree; drag & drop
+  between panes, from Explorer/Finder, and out to Explorer/Finder/the desktop; filter, sort, rename,
+  delete, new folder, permissions (chmod), copy path, folder bookmarks, tabs reopen where you left off
+- **Jump hosts:** reach servers behind a bastion (chains work); "Open SSH terminal here" opens a shell
+  in the folder you're looking at
+- **Checksums:** optionally verify every transfer (SHA-256/MD5 on the server via `sha256sum`, FTP `HASH`,
+  or the S3 ETag); sync can compare files by content
+- **Command palette (Ctrl+K):** jump to any site, bookmark, sync profile or action
 - **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
 - **Compare & sync:** pick two folders, see every change before it happens (upload, download,
   create, delete, conflicts), untick what you don't want, apply. One-way or both ways; mirror
@@ -77,6 +84,7 @@ Everything goes through `dev.sh` (Git Bash on Windows, or any bash on macOS/Linu
 | `./dev.sh check` | lint + tests + app selftest (what CI runs) |
 | `./dev.sh ship` | `check`, then `git pull --rebase` and push |
 | `./dev.sh build` | portable app in `dist/BlamixFiles` + zip, checked with a selftest |
+| `./dev.sh msi --test` | Windows installer (all users or just you), installed/upgraded/removed as a test |
 | `./dev.sh release v0.1.0` | `check`, bump the version, write CHANGELOG from the commits, commit, tag, push (`--dry-run` to preview) |
 | `./dev.sh clean` | remove build output and caches |
 

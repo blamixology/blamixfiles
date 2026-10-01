@@ -319,9 +319,10 @@ class _Tester(QObject):
 
 
 class SiteDialog(_Base):
-    def __init__(self, site: Site | None, groups: list[str], parent=None):
+    def __init__(self, site: Site | None, groups: list[str], parent=None, sites: list | None = None):
         super().__init__(parent)
         self.site = site.copy() if site else Site()
+        self.all_sites = sites or []
         self.setWindowTitle("Edit site" if site else "New site")
         self.setMinimumWidth(600)
         s = self.site
@@ -374,6 +375,14 @@ class SiteDialog(_Base):
         self.passive = QCheckBox("Passive mode (recommended)")
         self.passive.setChecked(s.ftp_passive)
         self.region = QLineEdit(s.s3_region, placeholderText="e.g. eu-central-1 (empty = provider default)")
+        self.jump = QComboBox()
+        self.jump.addItem("none (connect directly)", "")
+        for other in sorted(self.all_sites, key=lambda x: x.label.lower()):
+            if other.id != s.id and other.is_ssh:
+                self.jump.addItem(f"{other.label}  ({other.username + '@' if other.username else ''}{other.host})",
+                                  other.id)
+        self.jump.setCurrentIndex(max(0, self.jump.findData(s.jump_id)))
+        self.jump.setToolTip("Reach this server through another SSH site (a bastion / ProxyJump).")
         self.parallel = QSpinBox()
         self.parallel.setRange(1, 10)
         self.parallel.setValue(s.parallel)
@@ -384,6 +393,7 @@ class SiteDialog(_Base):
         form.addRow("Protocol", self.proto)
         form.addRow("Host", self.hp_widget)
         form.addRow("Region", self.region)
+        form.addRow("Jump host", self.jump)
         form.addRow("Username", self.user)
         form.addRow("Login", self.auth)
         form.addRow("Password", self.password)
@@ -451,6 +461,7 @@ class SiteDialog(_Base):
         self.port.setSpecialValueText(f"default ({DEFAULT_PORTS.get(proto, 22)})")
         self.form.setRowVisible(self.passive, proto.startswith("ftp"))
         self.form.setRowVisible(self.region, s3)
+        self.form.setRowVisible(self.jump, ssh_ and self.jump.count() > 1)
         self._label(self.hp_widget, "Endpoint" if s3 else "Host")
         self._label(self.user, "Access key" if s3 else "Username")
         self._label(self.password, "Secret key" if s3 else ("App password" if dav else "Password"))
@@ -494,6 +505,7 @@ class SiteDialog(_Base):
         s.production = self.production.isChecked()
         s.ftp_passive = self.passive.isChecked()
         s.s3_region = self.region.text().strip()
+        s.jump_id = (self.jump.currentData() or "") if s.is_ssh else ""
         s.parallel = self.parallel.value()
         s.notes = self.notes.toPlainText()
         return s

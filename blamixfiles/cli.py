@@ -56,7 +56,9 @@ _store_cache: list[Store] = []
 
 def store() -> Store:
     if not _store_cache:
-        _store_cache.append(_store())
+        st = _store()
+        _store_cache.append(st)
+        ssh.set_site_resolver(lambda sid: st.sites.get(sid))      # jump hosts
     return _store_cache[0]
 
 
@@ -68,6 +70,8 @@ def resolve(target: str) -> tuple[Site, str]:
             site.password = getpass.getpass(f"Password for {site.username}@{site.host}: ")
         return site, path
     name, sep, path = target.partition(":")
+    if sep and len(name) == 1 and os.name == "nt":          # C:\path is a local path, not a site
+        raise UsageError(f"'{target}' looks like a local path; remote targets are <site>:/path")
     if not sep:
         raise UsageError(f"'{target}': use <site>:/path or a URL like sftp://user@host/path")
     site = store().find(name)
@@ -139,19 +143,21 @@ def cmd_ls(a) -> int:
     return 0
 
 
-def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0) -> int:
+def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = False) -> int:
     def on_change(j: E.Job) -> None:
         if quiet or j.is_dir:
             return
         if j.status == E.DONE:
-            print(f"✔ {j.src} → {j.dst}")
+            v = f"  [{j.verified} ok]" if j.verified not in ("", "unsupported") else (
+                "  [not verified: server can't checksum]" if j.verified == "unsupported" else "")
+            print(f"✔ {j.src} → {j.dst}{v}")
         elif j.status == E.SKIPPED:
             print(f"· skipped (exists) {j.dst}")
         elif j.status == E.FAILED:
             print(f"✖ {j.src}: {j.error}", file=sys.stderr)
     eng = E.TransferEngine(lambda s: connect(s), workers=4, on_change=on_change,
                            policy=policy if policy != "ask" else "overwrite",
-                           limit_up=limit_kb * 1024, limit_down=limit_kb * 1024)
+                           limit_up=limit_kb * 1024, limit_down=limit_kb * 1024, verify=verify)
     try:
         jobs_fn(eng)
         eng.wait()
@@ -180,7 +186,7 @@ def cmd_get(a) -> int:
     if entry is None:
         raise UsageError(f"Not found on the server: {path}")
     os.makedirs(a.dest, exist_ok=True)
-    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet, a.limit)
+    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet, a.limit, a.verify)
 
 
 def cmd_put(a) -> int:
@@ -195,7 +201,7 @@ def cmd_put(a) -> int:
     def queue(eng):
         for src in a.sources:
             eng.upload(site, os.path.abspath(src), path)
-    return _run(queue, a.policy, a.quiet, a.limit)
+    return _run(queue, a.policy, a.quiet, a.limit, a.verify)
 
 
 def cmd_import(a) -> int:
@@ -241,6 +247,8 @@ def cmd_sync(a) -> int:
         opt.mirror = True
     if a.size_only:
         opt.compare = "size"
+    if a.checksum:
+        opt.compare = "checksum"
     if a.exclude:
         opt.excludes = opt.excludes + a.exclude
     if opt.direction == "both":
@@ -254,6 +262,8 @@ def cmd_sync(a) -> int:
         loc = S.scan(LocalBackend(), os.path.abspath(local_root), opt.excludes)
         rem = S.scan(b, remote_root, opt.excludes)
         plan = S.compare(loc, rem, os.path.abspath(local_root), remote_root, opt)
+        if plan.to_check:
+            S.resolve_checksums(plan, LocalBackend(), b)
         if a.json:
             print(json.dumps({"summary": plan.summary(), "actions": [
                 {"action": x.kind, "path": x.rel, "dir": x.is_dir, "reason": x.reason, "bytes": x.size}
@@ -272,7 +282,8 @@ def cmd_sync(a) -> int:
                                  "in scripts (or run with --dry-run first)")
             if not _yes(f"Delete {len(deletes)} item(s)?"):
                 return 1
-        return _run(lambda eng: S.apply(plan, site, eng, b, LocalBackend()), "overwrite", a.quiet, a.limit)
+        return _run(lambda eng: S.apply(plan, site, eng, b, LocalBackend()), "overwrite", a.quiet, a.limit,
+                    a.verify)
     finally:
         b.close()
 
@@ -301,6 +312,7 @@ def main(argv: list[str] | None = None) -> None:
                        choices=["overwrite", "skip", "newer", "resume"])
         p.add_argument("--limit", type=int, default=0, metavar="KB/s",
                        help="speed limit in KB/s (default: unlimited)")
+        p.add_argument("--verify", action="store_true", help="compare checksums after each file")
         p.add_argument("-q", "--quiet", action="store_true")
         p.set_defaults(fn=fn)
     p = sub.add_parser("sync", help="compare a local and a remote folder and bring them in line")
@@ -314,6 +326,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--yes", action="store_true", help="allow deletes without asking")
     p.add_argument("--json", action="store_true", help="print the plan as JSON")
     p.add_argument("--limit", type=int, default=0, metavar="KB/s")
+    p.add_argument("--verify", action="store_true", help="compare checksums after each file")
+    p.add_argument("--checksum", action="store_true",
+                   help="compare same-size files by content (slower; needs server-side hashing)")
     p.add_argument("-q", "--quiet", action="store_true")
     p.set_defaults(fn=cmd_sync)
     p = sub.add_parser("profiles", help="list saved sync profiles")

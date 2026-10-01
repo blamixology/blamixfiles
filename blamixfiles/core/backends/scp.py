@@ -176,6 +176,14 @@ class SCPBackend(Backend):
             stamp = _t.strftime("%Y%m%d%H%M.%S", _t.localtime(mtime))
             self.run(f"touch -m -t {stamp} -- {_q(path)}", check=False)
 
+    def checksum(self, path, algos=("sha256", "md5")):
+        from ..checksum import remote_hash_via_shell
+        for algo in algos:
+            h = remote_hash_via_shell(lambda c: self.run(c, check=False), path, algo)
+            if h:
+                return algo, h
+        return None
+
     # ------------------------------------------------------------ scp protocol
     @staticmethod
     def _ack(chan: paramiko.Channel) -> None:

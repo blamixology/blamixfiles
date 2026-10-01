@@ -32,11 +32,19 @@ jobs:
       - name: Build (includes a selftest of the built app)
         run: ./dev.sh build
         env: { PYTHON: python }
+      - name: MSI installer (built, then installed/upgraded/uninstalled in both modes as a test)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_type }}" -eq "tag" ? "${{ github.ref_name }}" : ""
+          ./packaging/windows/build_msi.ps1 -Version $v -Test
+          Move-Item BlamixFiles-*-x64.msi dist/
       - uses: actions/upload-artifact@v4
         with:
           name: BlamixFiles-${{ matrix.name }}
           path: |
             dist/BlamixFiles-*.zip
+            dist/BlamixFiles-*.msi
             dist/BlamixFiles-*.tar.gz
           if-no-files-found: error
 
@@ -59,7 +67,8 @@ jobs:
             echo
             echo "| System | File |"
             echo "|---|---|"
-            echo "| Windows | \`BlamixFiles-windows-x64.zip\` (unzip anywhere, run BlamixFiles.exe) |"
+            echo "| Windows installer | \`BlamixFiles-$v-x64.msi\` (all users or just you) |"
+            echo "| Windows portable | \`BlamixFiles-windows-x64.zip\` (unzip anywhere, run BlamixFiles.exe) |"
             echo "| macOS Apple Silicon / Intel | \`BlamixFiles-macos-arm64.zip\` / \`BlamixFiles-macos-x64.zip\` |"
             echo "| Linux | \`BlamixFiles-linux-x64.tar.gz\` |"
             echo
