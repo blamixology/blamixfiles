@@ -318,6 +318,21 @@ class _Tester(QObject):
     done = Signal(str)
 
 
+def _tz_from_text(text: str) -> str:
+    """'UTC+2', '+2', '+5:30', '-60m', 'auto' -> 'auto' or minutes as text."""
+    import re
+    t = (text or "").strip().lower().replace(" ", "")
+    if t in ("", "auto", "auto-detect", "autodetect"):
+        return "auto"
+    if t.endswith("m") and t[:-1].lstrip("+-").isdigit():
+        return str(int(t[:-1]))
+    m = re.fullmatch(r"(?:utc|gmt)?([+-]?)(\d{1,2})(?::?(\d{2}))?", t)
+    if not m:
+        return "auto"
+    mins = int(m.group(2)) * 60 + int(m.group(3) or 0)
+    return str(-mins if m.group(1) == "-" else mins)
+
+
 class SiteDialog(_Base):
     def __init__(self, site: Site | None, groups: list[str], parent=None, sites: list | None = None):
         super().__init__(parent)
@@ -374,6 +389,18 @@ class SiteDialog(_Base):
         self.production.setChecked(s.production)
         self.passive = QCheckBox("Passive mode (recommended)")
         self.passive.setChecked(s.ftp_passive)
+        self.tz = QComboBox(editable=True)
+        self.tz.setToolTip("Only for servers that list files with LIST (old servers): their times are in "
+                           "the server's own time zone. Auto-detect compares with MDTM.")
+        self.tz.addItem("Auto-detect", "auto")
+        for h in range(-12, 15):
+            self.tz.addItem(f"UTC{'+' if h >= 0 else '-'}{abs(h)}", str(h * 60))
+        cur = (s.ftp_tz or "auto").strip()
+        i = self.tz.findData(cur)
+        if i >= 0:
+            self.tz.setCurrentIndex(i)
+        else:
+            self.tz.setEditText(cur)
         self.region = QLineEdit(s.s3_region, placeholderText="e.g. eu-central-1 (empty = provider default)")
         self.jump = QComboBox()
         self.jump.addItem("none (connect directly)", "")
@@ -405,6 +432,7 @@ class SiteDialog(_Base):
         form.addRow("Color", self.color)
         form.addRow("", self.production)
         form.addRow("FTP", self.passive)
+        form.addRow("Server time zone", self.tz)
         form.addRow("Parallel transfers", self.parallel)
         form.addRow("Notes", self.notes)
         self.form = form
@@ -460,6 +488,7 @@ class SiteDialog(_Base):
         self.auth.blockSignals(False)
         self.port.setSpecialValueText(f"default ({DEFAULT_PORTS.get(proto, 22)})")
         self.form.setRowVisible(self.passive, proto.startswith("ftp"))
+        self.form.setRowVisible(self.tz, proto.startswith("ftp"))
         self.form.setRowVisible(self.region, s3)
         self.form.setRowVisible(self.jump, ssh_ and self.jump.count() > 1)
         self._label(self.hp_widget, "Endpoint" if s3 else "Host")
@@ -504,11 +533,18 @@ class SiteDialog(_Base):
         s.color = self.color.currentData() or ""
         s.production = self.production.isChecked()
         s.ftp_passive = self.passive.isChecked()
+        s.ftp_tz = self._tz_value()
         s.s3_region = self.region.text().strip()
         s.jump_id = (self.jump.currentData() or "") if s.is_ssh else ""
         s.parallel = self.parallel.value()
         s.notes = self.notes.toPlainText()
         return s
+
+    def _tz_value(self) -> str:
+        i = self.tz.currentIndex()
+        if i >= 0 and self.tz.itemText(i) == self.tz.currentText():
+            return self.tz.itemData(i)
+        return _tz_from_text(self.tz.currentText())
 
     def _save(self) -> None:
         s = self._collect()

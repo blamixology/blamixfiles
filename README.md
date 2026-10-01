@@ -48,7 +48,12 @@ code once; transfers reuse that login.
   Sync menu or `blamixfiles sync "Deploy web"`
 - **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers, find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
 - **Site manager:** groups, colors, **production flag** (red tab + extra confirmation before deleting)
-- **Import from FileZilla** (File → Import, or `blamixfiles import filezilla`)
+- **Edit in another app (Shift+F4):** prefer VS Code or Notepad++? The file opens there, and every save
+  is uploaded back (asks first; checks nobody changed the server copy in the meantime)
+- **Import** from FileZilla, WinSCP (WinSCP.ini or the registry, saved passwords included) and
+  BlamixShell (File → Import, or `blamixfiles import filezilla|winscp|blamixshell`)
+- **Old FTP servers:** file times from servers that only speak `LIST` are corrected for the server's
+  time zone (detected automatically, or set per site), so sync doesn't re-copy unchanged files
 - **Portable:** data (vault, known_hosts, settings) lives in `data/` next to the app
 
 ## Run from source
@@ -72,6 +77,8 @@ blamixfiles sync ./dist mysite:/var/www --mirror --dry-run     # preview, then d
 blamixfiles sync "Deploy web" --yes                             # a profile saved in the app
 blamixfiles watch ./site mysite:/var/www --ignore "*.map"       # upload every change, Ctrl+C to stop
 blamixfiles import filezilla
+blamixfiles import winscp                                       # WinSCP.ini or the Windows registry
+blamixfiles import blamixshell                                  # asks for the BlamixShell master password
 ```
 
 Saved sites come from the vault (`BLAMIXFILES_VAULT_PASSWORD` or a prompt).

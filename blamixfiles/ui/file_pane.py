@@ -157,6 +157,7 @@ class FilePane(QWidget):
     transfer = Signal(object, object, str)     # entries (list[Entry]), source pane, target dir on the other side
     upload_paths = Signal(object, str)         # local paths from the OS, target dir here
     edit = Signal(object, object)              # Entry, this pane
+    edit_external = Signal(object, object)     # Entry, this pane: open in another program
     message = Signal(str, bool)
 
     def __init__(self, session: Session, title: str, start_dir: str = "", parent=None):
@@ -227,7 +228,8 @@ class FilePane(QWidget):
 
         for key, fn in ((Qt.Key_Backspace, self.go_up), (Qt.Key_F5, self.refresh),
                         (Qt.Key_Delete, self.delete_selected), (Qt.Key_F2, self.rename_selected),
-                        (Qt.Key_F4, self._edit_selected)):
+                        (Qt.Key_F4, self._edit_selected),
+                        (QKeySequence("Shift+F4"), self._edit_external_selected)):
             sc = QShortcut(QKeySequence(key), self.tree)
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(fn)
@@ -347,6 +349,10 @@ class FilePane(QWidget):
             self.open_dir(item.entry.path)
         else:
             self.edit.emit(item.entry, self)
+
+    def _edit_external_selected(self) -> None:
+        for e in [e for e in self.selected() if not e.is_dir][:5]:
+            self.edit_external.emit(e, self)
 
     def _edit_selected(self) -> None:
         files = [e for e in self.selected() if not e.is_dir]
@@ -527,6 +533,11 @@ class FilePane(QWidget):
                 m.addAction(icon("folder-open"), "Open", lambda: self.open_dir(sel[0].path))
             if files:
                 m.addAction(icon("edit"), "Edit (F4)", self._edit_selected)
+                ext = m.addMenu(icon("code"), "Edit in another app")
+                ext.addAction(icon("edit"), "Open (Shift+F4)", self._edit_external_selected)
+                ext.addSeparator()
+                ext.addAction("Choose program…", lambda: self.edit_external.emit(None, "choose"))
+                ext.addAction("Use the system's default app", lambda: self.edit_external.emit(None, "default"))
             if self.other:
                 m.addAction(icon("download" if remote else "upload"),
                             "Download" if remote else "Upload", self.send_selected)

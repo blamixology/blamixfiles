@@ -7,7 +7,7 @@
   blamixfiles sync   ./dist mysite:/var/www --mirror --dry-run
   blamixfiles sync   "Deploy web"            (a profile saved in the app)
   blamixfiles profiles
-  blamixfiles import filezilla [sitemanager.xml]
+  blamixfiles import filezilla|winscp|blamixshell [file]
 
 Saved sites come from the encrypted vault: the master password is read from
 BLAMIXFILES_VAULT_PASSWORD or asked for. Exit codes: 0 ok, 1 some transfers failed,
@@ -255,13 +255,42 @@ def cmd_watch(a) -> int:
 
 
 def cmd_import(a) -> int:
-    from .importers import filezilla_default_path, import_filezilla
-    path = a.file or str(filezilla_default_path())
-    if not os.path.exists(path):
-        raise UsageError(f"Not found: {path}")
-    sites = import_filezilla(path)
+    from . import importers as I
+    notes: list[str] = []
+    if a.source == "filezilla":
+        path = a.file or str(I.filezilla_default_path())
+        if not os.path.exists(path):
+            raise UsageError(f"Not found: {path}")
+        sites = I.import_filezilla(path)
+    elif a.source == "winscp":
+        path = a.file or I.winscp_default_source()
+        if not path:
+            raise UsageError("WinSCP.ini not found: pass its path")
+        if path != "registry" and not os.path.exists(path):
+            raise UsageError(f"Not found: {path}")
+        try:
+            sites, notes = I.import_winscp(path)
+        except I.ImportError_ as e:
+            raise UsageError(str(e)) from None
+        path = "the Windows registry" if path == "registry" else path
+    else:
+        found = I.blamixshell_default_path()
+        path = a.file or (str(found) if found else "")
+        if not path or not os.path.exists(path):
+            raise UsageError("BlamixShell vault not found: pass the path to vault.sdv")
+        pw = os.environ.get("BLAMIXSHELL_VAULT_PASSWORD")
+        if pw is None:
+            if not sys.stdin.isatty():
+                raise UsageError("Set BLAMIXSHELL_VAULT_PASSWORD (no terminal to ask for it)")
+            pw = getpass.getpass("BlamixShell master password: ")
+        try:
+            sites, notes = I.import_blamixshell(path, pw)
+        except I.ImportError_ as e:
+            raise UsageError(str(e)) from None
     added = store().import_sites(sites)
     print(f"Imported {added} new site(s) from {path} ({len(sites) - added} already there).")
+    for n in notes:
+        print(f"  note: {n}")
     return 0
 
 
@@ -394,8 +423,9 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("profiles", help="list saved sync profiles")
     p.set_defaults(fn=cmd_profiles)
     p = sub.add_parser("import", help="import sites from another client")
-    p.add_argument("source", choices=["filezilla"])
-    p.add_argument("file", nargs="?")
+    p.add_argument("source", choices=["filezilla", "winscp", "blamixshell"])
+    p.add_argument("file", nargs="?", help='the file to read (default: where that app keeps it); '
+                   'for winscp also "registry"')
     p.set_defaults(fn=cmd_import)
     a = ap.parse_args(argv)
     try:

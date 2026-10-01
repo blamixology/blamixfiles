@@ -40,6 +40,7 @@ class Site:
     production: bool = False          # tints the tab red, asks before deleting
     ftp_passive: bool = True
     ftp_encoding: str = "utf-8"
+    ftp_tz: str = "auto"              # FTP LIST times: "auto" (detect with MDTM) or minutes from UTC, e.g. "120"
     tls_verify: bool = True           # FTPS: verify the server certificate
     tls_pinned: str = ""              # FTPS/WebDAVS: sha256 of a self-signed cert the user trusted
     s3_region: str = ""               # S3: region (empty = us-east-1 / provider default)
@@ -184,20 +185,36 @@ class Store:
         return sorted(out, key=str.lower)
 
     def import_sites(self, sites: list[Site]) -> int:
-        existing = {(s.protocol, s.host.lower(), s.effective_port, s.username) for s in self.sites.values()}
-        added = 0
+        """Add sites that aren't here yet (same protocol, host, port and user = same site).
+        Jump-host links between imported sites are kept, also when the jump host
+        already existed (it then points at the existing copy)."""
+        existing = {(s.protocol, s.host.lower(), s.effective_port, s.username): s.id for s in self.sites.values()}
+        same: dict[str, str] = {}             # imported id -> id of the site that's kept
+        added_sites: list[Site] = []
         for s in sites:
             key = (s.protocol, s.host.lower(), s.effective_port, s.username)
-            if not s.host or key in existing:
+            if not s.host:
                 continue
+            if key in existing:
+                same[s.id] = existing[key]
+                continue
+            if s.id in self.sites:            # an id clash with an unrelated site: new id
+                old = s.id
+                s.id = Site().id
+                same[old] = s.id
             self.sites[s.id] = s
-            existing.add(key)
+            existing[key] = s.id
             if s.group:
                 self.groups.add(s.group)
-            added += 1
-        if added:
+            added_sites.append(s)
+        for s in added_sites:
+            if s.jump_id:
+                s.jump_id = same.get(s.jump_id, s.jump_id)
+                if s.jump_id not in self.sites:
+                    s.jump_id = ""
+        if added_sites:
             self.save()
-        return added
+        return len(added_sites)
 
 
 def open_or_create(path: Path, password: str, create: bool) -> Store:

@@ -54,7 +54,12 @@ class Session:
         def job():
             b = self._ensure()
             try:
-                return fn(b)
+                result = fn(b)
+                note = getattr(b, "tz_note", "")
+                if note and note != getattr(self, "_tz_logged", ""):
+                    self._tz_logged = note
+                    self.log(f"Server time zone for file times: {note}", False)
+                return result
             except Exception as e:
                 if self.is_local or not is_connection_error(e):
                     raise

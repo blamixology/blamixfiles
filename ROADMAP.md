@@ -33,6 +33,11 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Drag files from the remote pane to the desktop; folder trees |
 | ✅ | Bookmarks, command palette, tab restore |
 | ✅ | Watch a local folder and upload changes (app and `blamixfiles watch`) |
+| ✅ | Import from WinSCP and BlamixShell |
+| ✅ | FTP server time zone (auto-detected with MDTM, or set per site) |
+| ✅ | Edit in another app (VS Code, Notepad++, …) with upload on save and conflict check |
+| 🗓 | Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain) |
+| 🗓 | Light theme and "follow the system" |
 | 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line) |
 
 ## Later / maybe

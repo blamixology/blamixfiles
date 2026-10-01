@@ -112,6 +112,7 @@ class SiteTab(QWidget):
             pane.transfer.connect(self.transfer)
             pane.upload_paths.connect(lambda paths, target: self.upload(paths, target))
             pane.edit.connect(lambda e, p: win.open_editor(p.session, e))
+            pane.edit_external.connect(win.edit_external)
             pane.message.connect(win.show_message)
         self.local.bookmarks = self.remote.bookmarks = win.bookmarks
         tree = bool(win.settings["show_tree"])
@@ -289,6 +290,10 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("")
         self.statusBar().addWidget(self.status_label, 1)
+        self.external_btn = QToolButton(objectName="Ghost")
+        self.external_btn.setPopupMode(QToolButton.InstantPopup)
+        self.external_btn.hide()
+        self.statusBar().addPermanentWidget(self.external_btn)
         self.queue_label = QLabel("")
         self.statusBar().addPermanentWidget(self.queue_label)
         self._build_menu()
@@ -355,15 +360,20 @@ class MainWindow(QMainWindow):
                      "• Drag files between the two panes (or from Explorer/Finder) to transfer them.<br>"
                      "• Double-click a text file to edit it right here. <b>Ctrl+S</b> saves it back to the "
                      "server.<br>"
-                     "• Moving from FileZilla? <b>File → Import from FileZilla</b>.")
+                     "• Moving from FileZilla or WinSCP? <b>File → Import</b> brings your sites over "
+                     "(BlamixShell servers too).")
         sub.setWordWrap(True)
         sub.setObjectName("Muted")
         lay.addWidget(sub)
         row = QHBoxLayout()
         b1 = QPushButton(icon("plus", "#0b0d12"), " New site", objectName="Primary")
         b1.clicked.connect(self.new_site)
-        b2 = QPushButton(icon("import"), " Import from FileZilla")
-        b2.clicked.connect(self.import_filezilla)
+        b2 = QPushButton(icon("import"), " Import sites")
+        im = QMenu(b2)
+        im.addAction("From FileZilla…", self.import_filezilla)
+        im.addAction("From WinSCP…", self.import_winscp)
+        im.addAction("From BlamixShell…", self.import_blamixshell)
+        b2.setMenu(im)
         row.addWidget(b1)
         row.addWidget(b2)
         row.addStretch(1)
@@ -387,6 +397,8 @@ class MainWindow(QMainWindow):
         act(f, "Command palette…", self.show_palette, "Ctrl+K", "search")
         f.addSeparator()
         act(f, "Import from FileZilla…", self.import_filezilla, None, "import")
+        act(f, "Import from WinSCP…", self.import_winscp, None, "import")
+        act(f, "Import from BlamixShell…", self.import_blamixshell, None, "import")
         f.addSeparator()
         act(f, "Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         act(f, "Quit", self.close, "Ctrl+Q")
@@ -420,6 +432,8 @@ class MainWindow(QMainWindow):
                 entries.append((p["name"], "sync profile", lambda p=p: self.run_profile(p), "sync"))
         actions = [("New site", self.new_site, "plus"), ("Compare & sync current tab", self.open_sync, "sync"),
                    ("Import from FileZilla", self.import_filezilla, "import"),
+                   ("Import from WinSCP", self.import_winscp, "import"),
+                   ("Import from BlamixShell", self.import_blamixshell, "import"),
                    ("Watch local folder & upload changes (current tab)", self.toggle_watch, "eye"),
                    ("Show/hide folder trees", self.toggle_trees, "folder"),
                    ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
@@ -632,6 +646,76 @@ class MainWindow(QMainWindow):
                "FileZilla keeps its own copy in that file (unencrypted unless you set a master "
                "password there), so consider removing it." if with_pw else ""))
 
+    def _imported(self, app: str, where: str, sites: list, notes: list[str]) -> None:
+        added = self.store.import_sites(sites)
+        self.reload_sites()
+        with_pw = sum(1 for x in sites if x.password)
+        msg = f"Imported {added} new site(s) from {where}"
+        if len(sites) - added:
+            msg += f" ({len(sites) - added} already here)"
+        msg += "."
+        if with_pw:
+            msg += f"\n\n{with_pw} saved password(s) are now encrypted in your BlamixFiles vault."
+        if notes:
+            msg += "\n\n" + "\n".join("• " + n for n in notes[:12])
+            if len(notes) > 12:
+                msg += f"\n… and {len(notes) - 12} more"
+        QMessageBox.information(self, f"Imported from {app}", msg)
+
+    def import_winscp(self) -> None:
+        from .. import importers as I
+        src = I.winscp_default_source()
+        if src == "registry":
+            r = QMessageBox.question(
+                self, "Import from WinSCP",
+                "Read the sessions WinSCP keeps in the Windows registry?\n\n"
+                "Choose No to pick a WinSCP.ini file instead.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if r == QMessageBox.Cancel:
+                return
+            if r == QMessageBox.No:
+                src = ""
+        if not src:
+            src, _ = QFileDialog.getOpenFileName(self, "WinSCP.ini", os.path.expanduser("~"),
+                                                 "WinSCP settings (WinSCP.ini *.ini)")
+            if not src:
+                return
+        try:
+            sites, notes = I.import_winscp(src)
+        except Exception as e:  # noqa: BLE001 (shown to the user)
+            QMessageBox.warning(self, "Import from WinSCP", f"Couldn't read the WinSCP sessions:\n{e}")
+            return
+        self._imported("WinSCP", "the Windows registry" if src == "registry" else src, sites, notes)
+
+    def import_blamixshell(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from .. import importers as I
+        found = I.blamixshell_default_path()
+        path = str(found) if found else ""
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "BlamixShell vault", os.path.expanduser("~"),
+                                                  "BlamixShell vault (vault.sdv *.sdv)")
+            if not path:
+                return
+        while True:
+            pw, ok = QInputDialog.getText(self, "Import from BlamixShell",
+                                          f"BlamixShell master password for\n{path}:", QLineEdit.Password)
+            if not ok:
+                return
+            try:
+                sites, notes = I.import_blamixshell(path, pw)
+                break
+            except I.ImportError_ as e:
+                if "password" not in str(e).lower():
+                    QMessageBox.warning(self, "Import from BlamixShell", str(e))
+                    return
+                QMessageBox.warning(self, "Import from BlamixShell", str(e))
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.warning(self, "Import from BlamixShell", f"Couldn't read the vault:\n{e}")
+                return
+        self._imported("BlamixShell", path, sites, notes)
+
     # ------------------------------------------------------------ tabs
     def open_site(self, site: Site, path: str = "") -> None:
         if site.id in self.store.sites:
@@ -669,6 +753,38 @@ class MainWindow(QMainWindow):
         ed.title_changed.connect(lambda t, w=ed: self._retitle(w, t))
         ed.message.connect(self.show_message)
         ed.saved.connect(lambda _p, s=session: self._refresh_panes_of(s))
+        ed.open_external.connect(lambda s=session, e=entry: self.external.open(s, e))
+
+    # ------------------------------------------------------------ edit in another app
+    @property
+    def external(self):
+        if getattr(self, "_external", None) is None:
+            from .external import ExternalEditor
+            self._external = ExternalEditor(self)
+        return self._external
+
+    def edit_external(self, entry, pane_or_cmd) -> None:
+        if pane_or_cmd == "choose":
+            self.external.choose_program()
+            return
+        if pane_or_cmd == "default":
+            self.external.use_default_app()
+            return
+        self.external.open(pane_or_cmd.session, entry)
+
+    def external_status(self, n: int) -> None:
+        """Status bar: 'N files open in other apps', with a menu to stop watching them."""
+        self.external_btn.setVisible(n > 0)
+        if not n:
+            return
+        self.external_btn.setText(f"✎ {n} file{'s' if n != 1 else ''} open in other apps")
+        m = QMenu(self.external_btn)
+        for e in list(self.external.edits.edits):
+            sub = m.addMenu(f"{e.name}   ({e.site.label})")
+            sub.addAction("Open again", lambda e=e: self.external._launch(e))
+            sub.addAction("Upload now", lambda e=e: self.external._upload(e))
+            sub.addAction("Stop watching", lambda e=e: self.external.stop(e))
+        self.external_btn.setMenu(m)
 
     def toggle_watch(self) -> None:
         tab = self.tabs.currentWidget()
@@ -726,6 +842,8 @@ class MainWindow(QMainWindow):
                 self.engine.cancel(j.id)
             for e in editors:
                 self.tabs.removeTab(self.tabs.indexOf(e))
+            if getattr(self, "_external", None) is not None:
+                self._external.forget_session(w.remote_session)
             w.close()
         self.tabs.removeTab(index)
         if self.tabs.count() == 0:

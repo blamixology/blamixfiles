@@ -9,3 +9,5 @@ Also: jump hosts, folder trees, drag to the desktop, checksum verification, book
 command palette, tab restore, FTP keep-alive and a Windows installer.
 Watch a local folder and upload every change (app and `blamixfiles watch`); big S3 and Nextcloud
 uploads resume after a crash or restart; About dialog with "made by Blamixology".
+Import from WinSCP and BlamixShell; FTP server time zone correction; edit files in another app
+(VS Code, Notepad++, …) with upload on save.

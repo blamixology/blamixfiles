@@ -379,3 +379,54 @@ def test_watch_folder_uploads_changes(app, window, tmp_path, monkeypatch):
         window.grab().save(str(tmp_path.parent / "shot-watch.png"))
         tab.watch_btn.setChecked(False)
         assert tab.watcher is None and tab.watch_bar.isHidden()
+
+
+def test_gui_edit_in_other_app_uploads_and_detects_conflicts(app, window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    import blamixfiles.ui.external as X
+    root = tmp_path / "srv"
+    (root / "www").mkdir(parents=True)
+    (root / "www" / "app.js").write_text("console.log(1)\n")
+    launched = []
+    monkeypatch.setattr(X, "launch", lambda program, path: launched.append(path))
+    answers = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: answers.pop(0) if answers else QMessageBox.Yes)
+    with SFTPTestServer(root) as srv:
+        site = Site(name="web", protocol="sftp", host="127.0.0.1", port=srv.port, username=USER,
+                    password=PASSWORD, remote_dir="/www")
+        window.store.upsert(site)
+        window.open_site(window.store.sites[site.id])
+        tab = window.site_tabs()[0]
+        assert wait(app, lambda: tab.remote.path == "/www" and tab.remote.entries)
+        entry = next(e for e in tab.remote.entries if e.name == "app.js")
+        window.edit_external(entry, tab.remote)
+        assert wait(app, lambda: launched), "opened in the other app"
+        local = launched[0]
+        assert open(local).read() == "console.log(1)\n"
+        ext = window.external
+        ext.edits.settle = 0.2
+        assert window.external_btn.isVisibleTo(window) and "1 file" in window.external_btn.text()
+
+        # saved in the other app -> asked -> uploaded
+        open(local, "w").write("console.log(2)\n")
+        answers[:] = [QMessageBox.Yes]
+        assert wait(app, lambda: (root / "www" / "app.js").read_text() == "console.log(2)\n", 10)
+        e = ext.edits.edits[0]
+        assert wait(app, lambda: e.uploads == 1)
+
+        # someone changes the server copy, then we save again -> conflict -> keep theirs
+        time.sleep(1.1)
+        (root / "www" / "app.js").write_text("console.log('theirs')\n")
+        open(local, "w").write("console.log(3)\n")
+        answers[:] = [QMessageBox.Yes, QMessageBox.Cancel]          # upload? yes. overwrite? no
+        assert wait(app, lambda: not answers and id(e) not in ext._busy, 10)
+        time.sleep(0.3)
+        assert (root / "www" / "app.js").read_text() == "console.log('theirs')\n"
+
+        # next save: no conflict any more (their version is the base) -> uploaded
+        open(local, "w").write("console.log(4)\n")
+        answers[:] = [QMessageBox.Yes]
+        assert wait(app, lambda: (root / "www" / "app.js").read_text() == "console.log(4)\n", 10)
+        ext.stop(e)
+        assert not window.external_btn.isVisibleTo(window)

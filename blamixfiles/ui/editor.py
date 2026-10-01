@@ -466,6 +466,7 @@ class EditorTab(QWidget):
     title_changed = Signal(str)
     message = Signal(str, bool)
     saved = Signal(str)                  # path
+    open_external = Signal()             # "open this file in another app"
 
     def __init__(self, session: Session, entry: Entry, parent=None):
         super().__init__(parent)
@@ -494,6 +495,11 @@ class EditorTab(QWidget):
         self.save_btn.clicked.connect(self.save)
         self.save_btn.setEnabled(False)
         bl.addWidget(self.save_btn)
+        ext_b = QToolButton()
+        ext_b.setIcon(icon("code"))
+        ext_b.setToolTip("Open in another app (VS Code, Notepad++, …): saves there are uploaded back")
+        ext_b.clicked.connect(self.open_external.emit)
+        bl.addWidget(ext_b)
         reload_b = QToolButton()
         reload_b.setIcon(icon("refresh"))
         reload_b.setToolTip("Reload from " + ("disk" if session.is_local else "server"))
@@ -543,7 +549,8 @@ class EditorTab(QWidget):
         self.session.run(fetch, self._loaded, self._load_failed)
 
     def _load_failed(self, msg: str) -> None:
-        self.ed.setPlainText(f"Can't open this file:\n\n{msg}")
+        self.ed.setPlainText(f"Can't open this file:\n\n{msg}\n\n"
+                             "To work on it anyway, use 'Open in another app' (the </> button above).")
         self.message.emit(msg, True)
 
     def _loaded(self, result) -> None:

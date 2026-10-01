@@ -18,6 +18,7 @@ DEFAULTS = {
     "show_tree": True,         # folder tree above each file list
     "restore_tabs": True,      # reopen site tabs (and their folders) on start
     "open_tabs": [],
+    "external_editor": "",     # program for "Edit in another app" ("" = the system default app)
 }
 
 

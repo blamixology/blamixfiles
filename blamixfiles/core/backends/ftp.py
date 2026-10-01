@@ -106,7 +106,8 @@ def parse_list_line(line: str, now: time.struct_time | None = None) -> dict | No
         month = _MONTHS.get(m["month"].lower(), 1)
         day = int(m["day"])
         yt = m["yt"]
-        if ":" in yt:   # this year (or last year if that date is in the future)
+        precise = ":" in yt
+        if precise:     # this year (or last year if that date is in the future)
             hh, mm = (int(x) for x in yt.split(":"))
             year = now.tm_year
             if (month, day) > (now.tm_mon, now.tm_mday + 1):
@@ -119,7 +120,7 @@ def parse_list_line(line: str, now: time.struct_time | None = None) -> dict | No
             mtime = 0
         return dict(name=name, is_dir=kind == "d", is_link=kind == "l", target=target,
                     size=int(m["size"]), mtime=float(mtime), mode=_mode_from_string(m["mode"]),
-                    owner=f"{m['owner']}:{m['group']}")
+                    owner=f"{m['owner']}:{m['group']}", precise=precise)
     m = _DOS.match(line)
     if m:
         mo, dd, yy = (int(x) for x in m["date"].split("-"))
@@ -135,8 +136,26 @@ def parse_list_line(line: str, now: time.struct_time | None = None) -> dict | No
         is_dir = m["dir"].upper() == "<DIR>"
         return dict(name=m["name"], is_dir=is_dir, is_link=False, target="",
                     size=0 if is_dir else int(m["dir"]),
-                    mtime=float(calendar.timegm((yy, mo, dd, hh, mi, 0))), mode=None, owner="")
+                    mtime=float(calendar.timegm((yy, mo, dd, hh, mi, 0))), mode=None, owner="",
+                    precise=True)
     return None
+
+
+def parse_tz(value: str) -> int | None:
+    """Site.ftp_tz -> seconds east of UTC, or None for "auto"."""
+    v = (value or "auto").strip().lower()
+    if v in ("", "auto"):
+        return None
+    try:
+        return int(float(v) * 60)
+    except ValueError:
+        return None
+
+
+def fmt_tz(seconds: int) -> str:
+    sign = "+" if seconds >= 0 else "-"
+    m = abs(seconds) // 60
+    return f"UTC{sign}{m // 60}" + (f":{m % 60:02d}" if m % 60 else "")
 
 
 def _mlsd_time(s: str) -> float:
@@ -159,6 +178,10 @@ class FTPBackend(Backend):
                                  symlinks=False, atomic_replace=False)
         self._mlsd = True
         self.secure = site.protocol in ("ftps", "ftps-implicit")
+        # LIST shows times in the server's local time zone (MLSD/MDTM are UTC). Seconds
+        # east of UTC to undo; None = not known yet (auto-detect on the first LIST).
+        self.tz_offset: int | None = parse_tz(getattr(site, "ftp_tz", "auto"))
+        self.tz_note = "" if self.tz_offset is None else f"set to {fmt_tz(self.tz_offset)}"
 
     # ---- TLS
     def _context(self, verify: bool) -> ssl.SSLContext:
@@ -301,15 +324,42 @@ class FTPBackend(Backend):
         except ftplib.error_perm:
             lines.clear()
             self.ftp.retrlines(f"LIST {path}", lines.append)
-        out = []
-        for ln in lines:
-            d = parse_list_line(ln)
-            if not d or d["name"] in (".", ".."):
+        parsed = [d for d in map(parse_list_line, lines) if d and d["name"] not in (".", "..")]
+        if self.tz_offset is None:
+            self._detect_tz(path, parsed)
+        shift = self.tz_offset or 0
+        return [Entry(name=d["name"], path=self.join(path, d["name"]), is_dir=d["is_dir"],
+                      size=d["size"], mtime=(d["mtime"] - shift) if d["mtime"] else 0.0, mode=d["mode"],
+                      owner=d["owner"], is_link=d["is_link"], link_target=d["target"])
+                for d in parsed]
+
+    def _detect_tz(self, path: str, parsed: list[dict]) -> None:
+        """Compare one file's LIST time (server local, minutes) with its MDTM time (UTC)
+        to learn the server's time zone; rounded to 15 minutes. Without MDTM: UTC."""
+        if self.features and "MDTM" not in self.features:
+            self.tz_offset, self.tz_note = 0, "assumed UTC (the server has no MDTM)"
+            return
+        for d in parsed:
+            if d["is_dir"] or d["is_link"] or not d.get("precise") or not d["mtime"]:
                 continue
-            out.append(Entry(name=d["name"], path=self.join(path, d["name"]), is_dir=d["is_dir"],
-                             size=d["size"], mtime=d["mtime"], mode=d["mode"], owner=d["owner"],
-                             is_link=d["is_link"], link_target=d["target"]))
-        return out
+            try:
+                resp = self.ftp.sendcmd(f"MDTM {self.join(path, d['name'])}")
+            except ftplib.error_perm:
+                continue                          # (that one file) - try another
+            except ftplib.Error:
+                break
+            stamp = resp.split()[-1][:14] if resp.startswith("213") else ""
+            try:
+                utc = calendar.timegm(time.strptime(stamp, "%Y%m%d%H%M%S"))
+            except ValueError:
+                continue
+            diff = d["mtime"] - (utc - utc % 60)      # LIST drops the seconds
+            offset = int(round(diff / 900.0)) * 900
+            if abs(offset) <= 14 * 3600:
+                self.tz_offset = offset
+                self.tz_note = f"detected {fmt_tz(offset)}"
+            return
+        # nothing to compare in this folder: try again on the next listing
 
     def stat(self, path: str) -> Entry | None:
         if self._mlsd and "MLST" in self.features:
