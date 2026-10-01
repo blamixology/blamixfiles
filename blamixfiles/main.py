@@ -76,19 +76,28 @@ def _selftest(app) -> int:
     from .ui.main_window import MainWindow
     from .vault import Vault
 
+    import threading
+    # never hang a build or `dev.sh check`: give up after 90 s with a clear exit code
+    watchdog = threading.Timer(90, lambda: (print("SELFTEST TIMEOUT", flush=True), os._exit(4)))
+    watchdog.daemon = True
+    watchdog.start()
+
     tmp = Path(tempfile.mkdtemp(prefix="blamixfiles-selftest-"))
     os.environ["BLAMIXFILES_HOME"] = str(tmp)      # never touch the real data folder
     store = Store(Vault.create(tmp / "v.bfv", "selftest", n_log2=10), {})
+    print("selftest: window", flush=True)
     win = MainWindow(store, Settings())
     win.show()
     app.processEvents()
+    print("selftest: libraries", flush=True)
     import pygments.lexers  # noqa: F401  (bundled?)
     import httpx  # noqa: F401
     import boto3                         # the S3 model must survive packaging/pruning
     boto3.session.Session().client("s3", region_name="us-east-1", aws_access_key_id="x",
                                    aws_secret_access_key="y")
-    print("SELFTEST OK")
+    print("selftest: closing", flush=True)
     win.close()
+    print("SELFTEST OK", flush=True)
     return 0
 
 

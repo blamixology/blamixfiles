@@ -97,8 +97,13 @@ cmd_check() {
   say "Tests"
   QT_QPA_PLATFORM=offscreen "$VPY" -m pytest -q tests
   say "App selftest"
-  QT_QPA_PLATFORM=offscreen BLAMIXFILES_SELFTEST=1 "$VPY" run.py | grep -q "SELFTEST OK" \
-    || die "The app didn't start"
+  local out
+  out=$(QT_QPA_PLATFORM=offscreen BLAMIXFILES_SELFTEST=1 "$VPY" run.py 2>&1) || true
+  if ! grep -q "SELFTEST OK" <<<"$out"; then
+    echo "$out" | tail -25
+    die "The app didn't start (output above)"
+  fi
+  ok "App starts"
   ok "All checks passed"
 }
 
