@@ -27,8 +27,7 @@ from .queue_view import QueueView
 from .session import Session
 from .theme import C, icon, style_window
 
-GITHUB = "https://github.com/blamixology/blamixfiles"
-KOFI = "https://ko-fi.com/blamixology"
+from ..links import COMPANY, COMPANY_URL, KOFI_URL as KOFI, REPO_URL as GITHUB
 
 
 class SiteTab(QWidget):
@@ -218,9 +217,18 @@ class MainWindow(QMainWindow):
         sl = QVBoxLayout(side)
         sl.setContentsMargins(12, 14, 12, 12)
         sl.setSpacing(8)
-        brand = QLabel("BlamixFiles", objectName="Brand")
-        sl.addWidget(brand)
-        sl.addWidget(QLabel(f"v{__version__} · SFTP · FTP · S3 · DAV", objectName="BrandSub"))
+        from .dialogs import _logo
+        brand = QHBoxLayout()
+        brand.setSpacing(10)
+        logo = _logo("app.png", 30, self)
+        if logo:
+            brand.addWidget(logo)
+        bt = QVBoxLayout()
+        bt.setSpacing(0)
+        bt.addWidget(QLabel("BlamixFiles", objectName="Brand", toolTip=f"Version {__version__}"))
+        bt.addWidget(QLabel("SFTP · FTP · S3 · WebDAV", objectName="BrandSub", toolTip=f"Version {__version__}"))
+        brand.addLayout(bt, 1)
+        sl.addLayout(brand)
         self.search = QLineEdit(placeholderText="Search sites", objectName="Search")
         self.search.textChanged.connect(self.reload_sites)
         sl.addWidget(self.search)
@@ -300,6 +308,7 @@ class MainWindow(QMainWindow):
         act(h, "BlamixFiles on GitHub", lambda: webbrowser.open(GITHUB), None, "github")
         act(h, "Report a problem", lambda: webbrowser.open(GITHUB + "/issues"), None, "help")
         act(h, "☕ Buy me a coffee", lambda: webbrowser.open(KOFI), None, "coffee")
+        act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
 
@@ -673,13 +682,8 @@ class MainWindow(QMainWindow):
         self.status_label.setStyleSheet(f"color:{C['danger'] if error else C['muted']};")
 
     def about(self) -> None:
-        QMessageBox.about(
-            self, "About BlamixFiles",
-            f"<h3>BlamixFiles {__version__}</h3>"
-            "<p>A free, open-source file transfer client: SFTP, FTP and FTPS, a built-in editor "
-            "and an encrypted password vault.</p>"
-            f"<p><a href='{GITHUB}'>{GITHUB}</a><br>MIT license. No ads, no bundled installers, no telemetry.</p>"
-            f"<p>If it saves you time: <a href='{KOFI}'>☕ buy me a coffee</a></p>")
+        from .dialogs import AboutDialog
+        AboutDialog(self).exec()
 
     def showEvent(self, e):  # noqa: N802
         super().showEvent(e)

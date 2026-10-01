@@ -7,7 +7,7 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
                                QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
@@ -555,3 +555,100 @@ class SiteDialog(_Base):
         ok = not msg or msg.startswith("OK")
         self.test_msg.setText(("✔ " + (msg or "Connected successfully.")) if ok else "✖ " + msg)
         self.test_msg.setStyleSheet(f"color:{C['ok'] if ok else C['danger']};")
+
+
+# ======================================================================= about
+def open_url(url: str) -> None:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+    QDesktopServices.openUrl(QUrl(url))
+
+
+def _logo(name: str, height: int, widget) -> QLabel | None:
+    """A crisp (HiDPI-aware) image label from assets/, or None if the file is missing."""
+    from PySide6.QtGui import QPixmap
+    from ..paths import assets_dir
+    pm = QPixmap(str(assets_dir() / name))
+    if pm.isNull():
+        return None
+    dpr = widget.devicePixelRatioF()
+    pm = pm.scaledToHeight(int(height * dpr), Qt.SmoothTransformation)
+    pm.setDevicePixelRatio(dpr)
+    lbl = QLabel()
+    lbl.setPixmap(pm)
+    return lbl
+
+
+class AboutDialog(_Base):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from .. import __version__, links
+        self.setWindowTitle("About BlamixFiles")
+        self.setFixedWidth(480)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 20)
+        lay.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        logo = _logo("app.png", 44, self)
+        if logo:
+            head.addWidget(logo)
+        name = QVBoxLayout()
+        name.setSpacing(0)
+        name.addWidget(QLabel("BlamixFiles", objectName="H1"))
+        name.addWidget(QLabel(f"Version {__version__}", objectName="Muted"))
+        head.addLayout(name, 1)
+        lay.addLayout(head)
+        lay.addWidget(QLabel("File transfer client for SFTP, SCP, FTP/FTPS, WebDAV and S3, with a "
+                             "built-in editor, compare & sync and an encrypted vault.", wordWrap=True))
+        lay.addWidget(QLabel("Free and open source (MIT). No ads, no bundled installers, no tracking, "
+                             "no paid tier.", objectName="Muted", wordWrap=True))
+
+        a = C["accent"]
+        lk = QLabel(f"<a style='color:{a}' href='{links.REPO_URL}'>GitHub</a> &nbsp;·&nbsp; "
+                    f"<a style='color:{a}' href='{links.RELEASES_URL}'>Release notes</a> &nbsp;·&nbsp; "
+                    f"<a style='color:{a}' href='{links.ISSUES_URL}'>Report a problem</a>")
+        lk.setOpenExternalLinks(True)
+        lk.setWordWrap(True)
+        lay.addWidget(lk)
+
+        lay.addSpacing(6)
+        box = QFrame(objectName="SupportBox")
+        box.setStyleSheet(f"#SupportBox {{ background:{C['surface']}; border:1px solid {C['border']};"
+                          " border-radius:12px; }")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(16, 12, 16, 14)
+        bl.setSpacing(10)
+        bl.addWidget(QLabel("If BlamixFiles saves you time, you can buy me a coffee. Thanks!", wordWrap=True))
+        row = QHBoxLayout()
+        coffee = QPushButton(icon("coffee", "#0b0d12"), " Buy me a coffee", objectName="Primary")
+        coffee.clicked.connect(lambda: open_url(links.KOFI_URL))
+        sponsor = QPushButton(icon("heart", C["muted"]), " Sponsor on GitHub")
+        sponsor.clicked.connect(lambda: open_url(links.SPONSOR_URL))
+        row.addWidget(coffee)
+        row.addWidget(sponsor)
+        row.addStretch(1)
+        bl.addLayout(row)
+        lay.addWidget(box)
+
+        # made by: a quiet credit - the logo, and under it the link (both open the company site)
+        lay.addSpacing(6)
+        brand = _logo("blamixology.png", 34, self)
+        if brand:
+            brand.setCursor(Qt.PointingHandCursor)
+            brand.setToolTip(links.COMPANY_URL)
+            brand.mousePressEvent = lambda _e: open_url(links.COMPANY_URL)
+            lay.addWidget(brand)
+        made = QLabel(f"<span style='color:{C['muted']}'>Made by:</span> "
+                      f"<a style='color:{a}' href='{links.COMPANY_URL}'>blamixology.ro</a>")
+        made.setOpenExternalLinks(True)
+        lay.addWidget(made)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close = QPushButton("Close")
+        close.setDefault(True)
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addSpacing(4)
+        lay.addLayout(row)

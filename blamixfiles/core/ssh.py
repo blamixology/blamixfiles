@@ -272,7 +272,11 @@ def _connect_kwargs(site) -> dict:
 
 # Jump hosts reference another saved site by id. The app (GUI or CLI) registers how to
 # look sites up, so backends don't need to know about the vault.
-_resolve_site: Callable[[str], object | None] = lambda site_id: None
+def _no_sites(site_id: str) -> object | None:
+    return None
+
+
+_resolve_site: Callable[[str], object | None] = _no_sites
 
 
 def set_site_resolver(fn: Callable[[str], object | None]) -> None:

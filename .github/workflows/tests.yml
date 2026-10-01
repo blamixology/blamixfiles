@@ -17,8 +17,8 @@ jobs:
     defaults:
       run: { shell: bash }        # Git Bash on Windows, like locally
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libgl1 libfontconfig1

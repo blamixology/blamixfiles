@@ -104,6 +104,12 @@ Security reviews are very welcome. The parts that matter most are the vault encr
 (`blamixfiles/vault.py`), host-key checking (`blamixfiles/core/ssh.py`) and certificate
 handling (`blamixfiles/core/backends/ftp.py`).
 
+## Made by
+
+<img src="blamixfiles/assets/blamixology.png" alt="Blamixology Tech" height="36">
+
+BlamixFiles is built and maintained by [Blamixology](https://blamixology.ro/en): custom software, automation and AI solutions.
+
 ## Support
 
 BlamixFiles is free and will stay free: no ads, no "Pro" tier. If it saves you time,

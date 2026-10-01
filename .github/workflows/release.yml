@@ -24,8 +24,8 @@ jobs:
     defaults:
       run: { shell: bash }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libgl1 libfontconfig1 libxcb-cursor0
@@ -39,21 +39,37 @@ jobs:
           $v = "${{ github.ref_type }}" -eq "tag" ? "${{ github.ref_name }}" : ""
           ./packaging/windows/build_msi.ps1 -Version $v -Test
           Move-Item BlamixFiles-*-x64.msi dist/
-      - uses: actions/upload-artifact@v4
+      # one download per file in the run's Artifacts list (no zip around them)
+      - name: Upload the portable app
+        uses: actions/upload-artifact@v7
         with:
-          name: BlamixFiles-${{ matrix.name }}
+          path: dist/BlamixFiles-${{ matrix.name }}.*
+          archive: false
+          if-no-files-found: error
+      - name: Upload the MSI installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/BlamixFiles-*-x64.msi
+          archive: false
+          if-no-files-found: error
+      # everything together, for the release job below
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.name }}
           path: |
             dist/BlamixFiles-*.zip
             dist/BlamixFiles-*.msi
             dist/BlamixFiles-*.tar.gz
           if-no-files-found: error
+          retention-days: 3
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Release notes from CHANGELOG.md
         run: |
           v="${GITHUB_REF_NAME#v}"
@@ -76,9 +92,9 @@ jobs:
             echo "Windows SmartScreen → *More info → Run anyway*; macOS → right-click → *Open* the first time."
           } >> notes.md
           cat notes.md
-      - uses: actions/download-artifact@v4
-        with: { path: out, merge-multiple: true }
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v8
+        with: { path: out, pattern: "bundle-*", merge-multiple: true }
+      - uses: softprops/action-gh-release@v3
         with:
           files: out/*
           body_path: notes.md
