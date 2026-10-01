@@ -97,3 +97,72 @@ def test_bad_keys_message(monkeypatch):
         err = be.ClientError({"Error": {"Code": "InvalidAccessKeyId", "Message": "x"}}, "ListBuckets")
         assert "access key" in friendly(S3Backend._error(err, "/"))
         assert srv.port
+
+
+class _Stop(Exception):
+    pass
+
+
+def _progress_with_skip(moved, skipped, stop_after=None):
+    def cb(n):
+        moved.append(n)
+        if stop_after is not None and sum(moved) >= stop_after:
+            raise _Stop()
+    cb.skip = skipped.append
+    return cb
+
+
+def test_multipart_upload_resumes_after_interruption(s3, monkeypatch):
+    import blamixfiles.core.backends.s3 as mod
+    b, _ = s3
+    monkeypatch.setattr(mod, "MULTIPART", 5 * mod.MB)
+    monkeypatch.setattr(mod, "PART", 5 * mod.MB)
+    monkeypatch.setattr(mod, "PARALLEL", 1)                      # deterministic order
+    data = os.urandom(23 * mod.MB)                                # 5 parts: 4 x 5 MB + 3 MB
+    moved, skipped = [], []
+    with pytest.raises(_Stop):
+        b.upload(io.BytesIO(data), "/photos/huge.bin", progress=_progress_with_skip(moved, skipped, 10 * mod.MB))
+    assert b.stat("/photos/huge.bin") is None                     # not finished...
+    assert len(b._pending("photos", "huge.bin")) == 1             # ...but S3 kept the parts
+
+    moved, skipped = [], []
+    b.upload(io.BytesIO(data), "/photos/huge.bin", progress=_progress_with_skip(moved, skipped))
+    assert sum(skipped) == 10 * mod.MB                            # 2 parts reused
+    assert sum(moved) == len(data) - 10 * mod.MB                  # only the rest was sent
+    assert b.read_bytes("/photos/huge.bin") == data
+    assert b._pending("photos", "huge.bin") == []
+
+
+def test_multipart_resume_ignores_parts_of_a_changed_file(s3, monkeypatch):
+    import blamixfiles.core.backends.s3 as mod
+    b, _ = s3
+    monkeypatch.setattr(mod, "MULTIPART", 5 * mod.MB)
+    monkeypatch.setattr(mod, "PART", 5 * mod.MB)
+    monkeypatch.setattr(mod, "PARALLEL", 1)
+    old = os.urandom(12 * mod.MB)
+    with pytest.raises(_Stop):
+        b.upload(io.BytesIO(old), "/photos/f.bin", progress=_progress_with_skip([], [], 5 * mod.MB))
+    new = old[:5 * mod.MB] + os.urandom(7 * mod.MB)               # first part same, rest edited
+    moved, skipped = [], []
+    b.upload(io.BytesIO(new), "/photos/f.bin", progress=_progress_with_skip(moved, skipped))
+    assert sum(skipped) == 5 * mod.MB and sum(moved) == 7 * mod.MB
+    assert b.read_bytes("/photos/f.bin") == new
+
+    # a completely different file: the old unfinished upload is dropped, not reused
+    with pytest.raises(_Stop):
+        b.upload(io.BytesIO(old), "/photos/g.bin", progress=_progress_with_skip([], [], 5 * mod.MB))
+    other = os.urandom(12 * mod.MB)
+    moved, skipped = [], []
+    b.upload(io.BytesIO(other), "/photos/g.bin", progress=_progress_with_skip(moved, skipped))
+    assert skipped == [] and b.read_bytes("/photos/g.bin") == other
+    assert b._pending("photos", "g.bin") == []
+
+
+def test_abort_unfinished(s3, monkeypatch):
+    import blamixfiles.core.backends.s3 as mod
+    b, _ = s3
+    monkeypatch.setattr(mod, "MULTIPART", 5 * mod.MB)
+    monkeypatch.setattr(mod, "PART", 5 * mod.MB)
+    with pytest.raises(_Stop):
+        b.upload(io.BytesIO(os.urandom(11 * mod.MB)), "/photos/x.bin", progress=_progress_with_skip([], [], 1))
+    assert b.abort_unfinished("/photos/x.bin") == 1 and b._pending("photos", "x.bin") == []

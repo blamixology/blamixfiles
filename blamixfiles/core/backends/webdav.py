@@ -7,6 +7,8 @@ fingerprint, like FTPS.
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import socket
 import ssl
 import xml.etree.ElementTree as ET
@@ -20,6 +22,10 @@ from ..vfs import Backend, BackendError, Capabilities, Entry, ProgressFn
 from .ftp import CertificateChanged, UntrustedCertificate
 
 BLOCK = 64 * 1024
+CHUNKED = 32 * 1024 * 1024        # Nextcloud: files this big go up in chunks, and can resume
+CHUNK = 16 * 1024 * 1024          # chunk size (Nextcloud v2: 5 MB .. 5 GB, at most 10,000 chunks)
+MB = 1024 * 1024
+_NC_PATH = re.compile(r"^(?P<root>.*?/remote\.php/dav)/files/(?P<user>[^/]+)/")
 DAV = "{DAV:}"
 PROPFIND_BODY = (b'<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop>'
                  b"<d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>")
@@ -45,6 +51,7 @@ class WebDAVBackend(Backend):
         self.secure = site.protocol == "webdavs"
         self.http: httpx.Client | None = None
         self.base = f"{'https' if self.secure else 'http'}://{site.host}:{site.effective_port}"
+        self.chunking: bool | None = None     # Nextcloud chunked uploads: None = not tried yet
 
     # ------------------------------------------------------------ connection
     def connect(self) -> None:
@@ -202,19 +209,84 @@ class WebDAVBackend(Backend):
     def upload(self, fp: BinaryIO, path: str, offset: int = 0,
                progress: ProgressFn | None = None) -> None:
         if offset:
-            raise BackendError("WebDAV can't resume uploads")
+            raise BackendError("WebDAV can't append to a file")
         start = fp.tell()
         fp.seek(0, 2)
         size = fp.tell() - start
         fp.seek(start)
+        if size >= CHUNKED and self.chunking is not False and _NC_PATH.match(path):
+            if self._nc_upload(fp, start, size, path, progress):
+                return
+            fp.seek(start)
+        self._put(path, self._stream(fp, size, progress), size)
 
-        def body() -> Iterator[bytes]:
-            while chunk := fp.read(BLOCK):
-                yield chunk
-                if progress:
-                    progress(len(chunk))
-        headers = {"Content-Length": str(size), "Content-Type": "application/octet-stream"}
-        self._req("PUT", path, content=body(), headers=headers, timeout=httpx.Timeout(None, connect=15))
+    @staticmethod
+    def _stream(fp, length: int, progress) -> Iterator[bytes]:
+        left = length
+        while left:
+            chunk = fp.read(min(BLOCK, left))
+            if not chunk:
+                break
+            left -= len(chunk)
+            yield chunk
+            if progress:
+                progress(len(chunk))
+
+    def _put(self, path: str, body, size: int, headers: dict | None = None) -> None:
+        h = {"Content-Length": str(size), "Content-Type": "application/octet-stream", **(headers or {})}
+        self._req("PUT", path, content=body, headers=h, timeout=httpx.Timeout(None, connect=15))
+
+    # ---- Nextcloud chunked upload (v2)
+    # The file goes up as numbered chunks into a per-transfer folder under
+    # /remote.php/dav/uploads/<user>/, then one MOVE assembles it at the destination.
+    # The folder's name comes from (destination, size, modification time), so if the
+    # upload stops, the next upload of the same unchanged file finds the chunks the
+    # server already has and sends only the rest. Nextcloud removes abandoned upload
+    # folders by itself after a while.
+    @staticmethod
+    def _chunk_size(size: int) -> int:
+        need = -(-size // 10_000)
+        return max(CHUNK, -(-need // MB) * MB)
+
+    def _nc_upload(self, fp, start: int, size: int, path: str, progress) -> bool:
+        """True when uploaded; False when the server doesn't do chunked uploads."""
+        m = _NC_PATH.match(path)
+        root, user = m.group("root"), m.group("user")
+        try:
+            mtime = int(os.fstat(fp.fileno()).st_mtime)
+        except (AttributeError, OSError, ValueError):
+            mtime = 0
+        tid = "blamixfiles-" + hashlib.sha1(f"{path}|{size}|{mtime}".encode()).hexdigest()[:32]
+        folder = f"{root}/uploads/{user}/{tid}"
+        dest = {"Destination": self._url(path), "OC-Total-Length": str(size)}
+        r = self._req("MKCOL", folder, headers=dest, ok=(201, 405, 400, 403, 404, 409, 415, 501))
+        if r.status_code not in (201, 405):        # no chunking API here (not Nextcloud, or too old)
+            self.chunking = False
+            return False
+        self.chunking = True
+        chunk = self._chunk_size(size)
+        count = -(-size // chunk)
+        have: dict[str, int] = {}
+        if r.status_code == 405:                   # exists: an earlier, unfinished upload of this file
+            try:
+                have = {e.name: e.size for e in self.list(folder)}
+            except Exception:  # noqa: BLE001
+                have = {}
+        skip = getattr(progress, "skip", None)
+        for n in range(1, count + 1):
+            length = min(chunk, size - (n - 1) * chunk)
+            name = f"{n:05d}"
+            if have.get(name) == length:
+                if skip:
+                    skip(length)
+                continue
+            fp.seek(start + (n - 1) * chunk)
+            self._put(f"{folder}/{name}", self._stream(fp, length, progress), length, dest)
+        headers = {**dest, "Overwrite": "T"}
+        if mtime:
+            headers["X-OC-Mtime"] = str(mtime)
+        self._req("MOVE", f"{folder}/.file", headers=headers, timeout=httpx.Timeout(None, connect=15))
+        return True
 
     def write_bytes(self, path: str, data: bytes, atomic: bool = True) -> None:
         # a WebDAV PUT replaces the file in one step on the server: no temp file needed

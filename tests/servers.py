@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import os
 import posixpath
+import shutil
 import socket
 import threading
 from pathlib import Path
@@ -385,18 +386,24 @@ class WebDAVTestServer:
 
     __test__ = False
 
-    def __init__(self, root: Path, tls: bool = False, certdir: Path | None = None):
+    def __init__(self, root: Path, tls: bool = False, certdir: Path | None = None, nextcloud: bool = False):
+        """nextcloud=True: files live under /remote.php/dav/files/tester/ and the
+        chunked-upload API (v2) under /remote.php/dav/uploads/tester/ works."""
         from cheroot import wsgi
         from wsgidav.wsgidav_app import WsgiDAVApp
+        self.chunk_puts: list[str] = []          # chunk names the fake Nextcloud received
+        mount = f"/remote.php/dav/files/{USER}" if nextcloud else "/"
         config = {
             "host": "127.0.0.1", "port": 0,
-            "provider_mapping": {"/": str(root)},
+            "provider_mapping": {mount: str(root)},
             "simple_dc": {"user_mapping": {"*": {USER: {"password": PASSWORD}}}},
             "http_authenticator": {"accept_basic": True, "accept_digest": False, "default_to_digest": False},
             "verbose": 0, "logging": {"enable": False, "enable_loggers": []},
             "property_manager": True, "lock_storage": True,
         }
         app = WsgiDAVApp(config)
+        if nextcloud:
+            app = _NextcloudChunks(app, Path(root), Path(root).parent / "nc-uploads", self.chunk_puts)
         self.server = wsgi.Server(("127.0.0.1", 0), app, numthreads=8)
         if tls:
             from cheroot.ssl.builtin import BuiltinSSLAdapter
@@ -411,6 +418,67 @@ class WebDAVTestServer:
 
     def __exit__(self, *exc):
         self.server.stop()
+
+
+class _NextcloudChunks:
+    """Just enough of Nextcloud's chunked upload v2 (MKCOL / PUT n / PROPFIND / MOVE .file)."""
+
+    def __init__(self, app, files_root: Path, uploads: Path, log: list):
+        self.app, self.files_root, self.uploads, self.log = app, files_root, uploads, log
+        self.prefix = f"/remote.php/dav/uploads/{USER}/"
+        uploads.mkdir(exist_ok=True)
+
+    def __call__(self, env, start_response):
+        from urllib.parse import unquote, urlsplit
+        path = unquote(env.get("PATH_INFO", ""))
+        if not path.startswith(self.prefix):
+            return self.app(env, start_response)
+        method = env["REQUEST_METHOD"]
+        rest = path[len(self.prefix):].strip("/")
+        tid, _, name = rest.partition("/")
+        folder = self.uploads / tid
+
+        def reply(code, body=b"", ctype="text/plain"):
+            start_response(code, [("Content-Type", ctype), ("Content-Length", str(len(body)))])
+            return [body]
+
+        if method in ("MKCOL", "PUT", "MOVE") and not env.get("HTTP_DESTINATION"):
+            return reply("400 Bad Request", b"v2 needs Destination")
+        if method == "MKCOL" and not name:
+            if folder.exists():
+                return reply("405 Method Not Allowed")
+            folder.mkdir()
+            return reply("201 Created")
+        if not folder.exists():
+            return reply("404 Not Found")
+        if method == "PUT" and name.isdigit():
+            n = int(env.get("CONTENT_LENGTH") or 0)
+            (folder / name).write_bytes(env["wsgi.input"].read(n))
+            self.log.append(name)
+            return reply("201 Created")
+        if method == "PROPFIND":
+            items = "".join(
+                f"<d:response><d:href>{self.prefix}{tid}/{f.name}</d:href><d:propstat><d:prop>"
+                f"<d:resourcetype/><d:getcontentlength>{f.stat().st_size}</d:getcontentlength></d:prop>"
+                "<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
+                for f in sorted(folder.iterdir()))
+            xml = f'<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">{items}</d:multistatus>'.encode()
+            return reply("207 Multi-Status", xml, "application/xml")
+        if method == "MOVE" and name == ".file":
+            dest = unquote(urlsplit(env["HTTP_DESTINATION"]).path)
+            rel = dest.split(f"/remote.php/dav/files/{USER}/", 1)[1]
+            data = b"".join(f.read_bytes() for f in sorted(folder.iterdir(), key=lambda f: int(f.name)))
+            if len(data) != int(env.get("HTTP_OC_TOTAL_LENGTH", -1)):
+                return reply("400 Bad Request", b"size mismatch")
+            target = self.files_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            if env.get("HTTP_X_OC_MTIME"):
+                t = int(env["HTTP_X_OC_MTIME"])
+                os.utime(target, (t, t))
+            shutil.rmtree(folder)
+            return reply("201 Created")
+        return reply("405 Method Not Allowed")
 
 
 # ------------------------------------------------------------------ S3 (moto)

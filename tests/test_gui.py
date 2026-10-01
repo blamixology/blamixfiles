@@ -349,3 +349,33 @@ def test_bookmarks_and_command_palette(app, window, tmp_path, monkeypatch):
         assert pal.list.item(0).text().startswith("web-01")
         pal.q.setText("sftp://me@host.example")
         assert pal.list.item(0).text().startswith("Quick connect")
+
+
+def test_watch_folder_uploads_changes(app, window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    root = tmp_path / "srv"
+    (root / "www").mkdir(parents=True)
+    local = tmp_path / "site"
+    local.mkdir()
+    (local / "index.html").write_text("v1")
+    with SFTPTestServer(root) as srv:
+        site = Site(name="web", protocol="sftp", host="127.0.0.1", port=srv.port,
+                    username=USER, password=PASSWORD, local_dir=str(local), remote_dir="/www")
+        window.store.upsert(site)
+        window.open_site(window.store.sites[site.id])
+        tab = window.site_tabs()[0]
+        assert wait(app, lambda: tab.remote.path == "/www" and tab.remote_session.backend is not None)
+        asked = []
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: asked.append(self.text()) or QMessageBox.Yes)
+        tab.watch_btn.setChecked(True)
+        assert tab.watcher is not None and asked and "not</b> deleted" in asked[0]
+        assert not tab.watch_bar.isHidden()
+        tab.watcher.interval, tab.watcher.settle = 0.1, 0.2
+        (local / "index.html").write_text("v2, edited")
+        up = root / "www" / "index.html"
+        assert wait(app, lambda: up.exists() and up.read_text() == "v2, edited", 15)
+        assert wait(app, lambda: "1 uploaded" in tab.watch_text.text())
+        assert wait(app, lambda: any(e.name == "index.html" for e in tab.remote.entries)), "pane refreshed"
+        window.grab().save(str(tmp_path.parent / "shot-watch.png"))
+        tab.watch_btn.setChecked(False)
+        assert tab.watcher is None and tab.watch_bar.isHidden()

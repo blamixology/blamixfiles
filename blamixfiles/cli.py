@@ -20,6 +20,7 @@ import getpass
 import json
 import os
 import sys
+import threading
 import time
 
 import paramiko
@@ -204,6 +205,55 @@ def cmd_put(a) -> int:
     return _run(queue, a.policy, a.quiet, a.limit, a.verify)
 
 
+WATCH_STOP = threading.Event()      # (tests set it instead of pressing Ctrl+C)
+
+
+def cmd_watch(a) -> int:
+    from .core import watch as W
+    import time
+    local = os.path.abspath(a.local)
+    if not os.path.isdir(local):
+        raise UsageError(f"Not a folder: {a.local}")
+    site, path = resolve(a.remote)
+    b = connect(site)             # settle host key / password questions first
+    path = path or b.home()
+    join = b.join
+    b.close()
+    if site.production and not a.yes:
+        if not _yes(f"{site.label} is marked as production. Upload every change to {path}?"):
+            return 1
+    ignore = W.DEFAULT_IGNORE + tuple(a.ignore or ())
+
+    def on_change(j: E.Job) -> None:
+        if a.quiet:
+            return
+        stamp = time.strftime("%H:%M:%S")
+        if j.status == E.DONE:
+            print(f"{stamp} ✔ {j.dst}", flush=True)
+        elif j.status == E.FAILED:
+            print(f"{stamp} ✖ {j.src}: {j.error}", file=sys.stderr, flush=True)
+    eng = E.TransferEngine(lambda s: connect(s), workers=2, on_change=on_change, policy="overwrite",
+                           limit_up=a.limit * 1024)
+    w = W.FolderWatcher(local, lambda rels: W.queue_uploads(eng, site, local, path, rels, join),
+                        ignore=ignore, interval=a.interval,
+                        on_error=lambda m: print(f"watch: {m}", file=sys.stderr))
+    w.start()
+    if not a.quiet:
+        print(f"Watching {local} → {site.label}:{path}  (Ctrl+C to stop; deletes are not uploaded)", flush=True)
+    try:
+        while not WATCH_STOP.wait(1):
+            pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        WATCH_STOP.clear()
+        w.stop()
+        eng.wait(30)
+        eng.shutdown()
+    failed = sum(1 for j in eng.jobs if j.status == E.FAILED)
+    return 1 if failed else 0
+
+
 def cmd_import(a) -> int:
     from .importers import filezilla_default_path, import_filezilla
     path = a.file or str(filezilla_default_path())
@@ -331,6 +381,16 @@ def main(argv: list[str] | None = None) -> None:
                    help="compare same-size files by content (slower; needs server-side hashing)")
     p.add_argument("-q", "--quiet", action="store_true")
     p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("watch", help="upload every file that changes in a local folder")
+    p.add_argument("local", help="local folder to watch")
+    p.add_argument("remote", help="<site>:/path or a URL")
+    p.add_argument("--ignore", action="append", metavar="PATTERN",
+                   help="also skip names matching this (repeatable; .git, node_modules, … are skipped already)")
+    p.add_argument("--interval", type=float, default=1.0, metavar="SECONDS", help="how often to look (default 1)")
+    p.add_argument("--limit", type=int, default=0, metavar="KB/s")
+    p.add_argument("--yes", action="store_true", help="don't ask for production sites")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.set_defaults(fn=cmd_watch)
     p = sub.add_parser("profiles", help="list saved sync profiles")
     p.set_defaults(fn=cmd_profiles)
     p = sub.add_parser("import", help="import sites from another client")

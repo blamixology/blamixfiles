@@ -72,10 +72,15 @@ class SiteTab(QWidget):
         sync.setIcon(icon("sync", C["accent"]))
         sync.setToolTip("Compare && sync these two folders (Ctrl+Shift+S)")
         sync.clicked.connect(lambda: win.open_sync(self))
+        self.watch_btn = QToolButton(checkable=True)
+        self.watch_btn.setIcon(icon("eye", C["accent"]))
+        self.watch_btn.setToolTip("Watch the local folder and upload every file that changes")
+        self.watch_btn.toggled.connect(self._toggle_watch)
         ml.addWidget(up)
         ml.addWidget(down)
         ml.addSpacing(14)
         ml.addWidget(sync)
+        ml.addWidget(self.watch_btn)
         ml.addStretch(1)
 
         split = QSplitter(Qt.Horizontal)
@@ -85,6 +90,21 @@ class SiteTab(QWidget):
         split.setStretchFactor(0, 1)
         split.setStretchFactor(2, 1)
         split.setCollapsible(1, False)
+        # "watching C:\site -> /var/www" bar (shown while a folder watch runs)
+        self.watcher = None
+        self.watch_bar = QWidget(objectName="Banner")
+        wb = QHBoxLayout(self.watch_bar)
+        wb.setContentsMargins(12, 5, 8, 5)
+        dot = QLabel()
+        dot.setPixmap(icon("eye", C["ok"], 16).pixmap(16, 16))
+        wb.addWidget(dot)
+        self.watch_text = QLabel("")
+        wb.addWidget(self.watch_text, 1)
+        stop = QPushButton("Stop watching")
+        stop.clicked.connect(lambda: self.watch_btn.setChecked(False))
+        wb.addWidget(stop)
+        self.watch_bar.hide()
+        lay.addWidget(self.watch_bar)
         lay.addWidget(split, 1)
         lay.addWidget(self.log_view)
 
@@ -123,7 +143,78 @@ class SiteTab(QWidget):
         for p in paths:
             self.win.engine.upload(self.remote_session.site, p, target, remote_join=join)
 
+    # ------------------------------------------------------------ folder watch
+    def _toggle_watch(self, on: bool) -> None:
+        if not on:
+            self.stop_watch()
+            return
+        if self.watcher is not None:
+            return
+        from ..core import watch as W
+        local, remote = self.local.path, self.remote.path
+        site = self.remote_session.site
+        backend = self.remote_session.backend
+        if not local or not remote or backend is None:
+            self.win.show_message("Connect to the server first, then open the folders to keep in step.", True)
+            self.watch_btn.setChecked(False)
+            return
+        warn = ("<p style='color:%s'><b>%s is marked as production.</b></p>" % (C["danger"], site.label)
+                if site.production else "")
+        box = QMessageBox(QMessageBox.Question, "Watch folder",
+                          f"{warn}<p>Upload every file that changes in<br><b>{local}</b><br>"
+                          f"to <b>{site.label}:{remote}</b>?</p>"
+                          "<p>New and changed files go up as soon as they're saved. Files you delete "
+                          "locally are <b>not</b> deleted on the server. Already-different files aren't "
+                          "touched: use Compare &amp; sync for those first.</p>"
+                          f"<p style='color:{C['muted']}'>Skipped: .git, node_modules, editor temp files…</p>",
+                          QMessageBox.Yes | QMessageBox.Cancel, self)
+        box.button(QMessageBox.Yes).setText("Start watching")
+        if box.exec() != QMessageBox.Yes:
+            self.watch_btn.setChecked(False)
+            return
+        join = backend.join
+        engine = self.win.engine
+
+        def changed(rels: list[str]) -> None:
+            jobs = W.queue_uploads(engine, site, local, remote, rels, join)
+            if jobs:
+                on_ui(lambda: self._watch_update(len(jobs), rels))
+        self.watcher = W.FolderWatcher(local, changed, on_error=lambda m: self.log(f"watch: {m}", True))
+        try:
+            self.watcher.start()
+        except OSError as e:
+            self.watcher = None
+            self.watch_btn.setChecked(False)
+            self.win.show_message(f"Can't watch {local}: {e.strerror or e}", True)
+            return
+        self.watch_count = 0
+        self.watch_target = f"{local}  →  {site.label}:{remote}"
+        self.watch_text.setText(f"Watching  {self.watch_target}")
+        self.watch_bar.show()
+        self.log(f"Watching {local} → {remote}")
+        self.win.tab_watch_changed(self)
+
+    def _watch_update(self, n: int, rels: list[str]) -> None:
+        self.watch_count += n
+        last = rels[-1] if rels else ""
+        self.watch_text.setText(f"Watching  {self.watch_target}   ·   {self.watch_count} uploaded"
+                                + (f"   ·   last: {last}" if last else ""))
+        for r in rels:
+            self.log(f"changed: {r}")
+
+    def stop_watch(self) -> None:
+        if self.watcher is None:
+            return
+        self.watcher.stop()
+        self.watcher = None
+        self.watch_bar.hide()
+        self.log("Stopped watching")
+        if self.watch_btn.isChecked():
+            self.watch_btn.setChecked(False)
+        self.win.tab_watch_changed(self)
+
     def close(self) -> None:
+        self.stop_watch()
         self._keepalive.stop()
         self.win.settings["last_local_dir"] = self.local.path
         self.local_session.close()
@@ -329,6 +420,7 @@ class MainWindow(QMainWindow):
                 entries.append((p["name"], "sync profile", lambda p=p: self.run_profile(p), "sync"))
         actions = [("New site", self.new_site, "plus"), ("Compare & sync current tab", self.open_sync, "sync"),
                    ("Import from FileZilla", self.import_filezilla, "import"),
+                   ("Watch local folder & upload changes (current tab)", self.toggle_watch, "eye"),
                    ("Show/hide folder trees", self.toggle_trees, "folder"),
                    ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
                    ("Pause/resume transfers", self.queue._toggle_pause, "pause"),
@@ -390,6 +482,8 @@ class MainWindow(QMainWindow):
         m.clear()
         a = m.addAction(icon("sync"), "Compare && sync current tab…", lambda: self.open_sync())
         a.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        w = m.addAction(icon("eye"), "Watch local folder && upload changes", self.toggle_watch)
+        w.setShortcut(QKeySequence("Ctrl+Shift+W"))
         profiles = self.store.sync_profiles
         if profiles:
             m.addSeparator()
@@ -575,6 +669,26 @@ class MainWindow(QMainWindow):
         ed.title_changed.connect(lambda t, w=ed: self._retitle(w, t))
         ed.message.connect(self.show_message)
         ed.saved.connect(lambda _p, s=session: self._refresh_panes_of(s))
+
+    def toggle_watch(self) -> None:
+        tab = self.tabs.currentWidget()
+        if isinstance(tab, SiteTab):
+            tab.watch_btn.toggle()
+        else:
+            self.show_message("Open a site tab first.", True)
+
+    def tab_watch_changed(self, tab: "SiteTab") -> None:
+        """A watching tab gets an eye icon, so it's visible from any tab."""
+        i = self.tabs.indexOf(tab)
+        if i == -1:
+            return
+        site = tab.site
+        if tab.watcher is not None:
+            self.tabs.setTabIcon(i, icon("eye", C["ok"], 16))
+            self.tabs.setTabToolTip(i, f"{site.address}\nWatching {tab.local.path}")
+        else:
+            self.tabs.setTabIcon(i, icon("server", site.color or (C["danger"] if site.production else C["muted"]), 16))
+            self.tabs.setTabToolTip(i, site.address)
 
     def _retitle(self, w: QWidget, title: str) -> None:
         i = self.tabs.indexOf(w)

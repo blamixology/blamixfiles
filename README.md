@@ -35,6 +35,11 @@ code once; transfers reuse that login.
   in the folder you're looking at
 - **Checksums:** optionally verify every transfer (SHA-256/MD5 on the server via `sha256sum`, FTP `HASH`,
   or the S3 ETag); sync can compare files by content
+- **Watch a folder (Ctrl+Shift+W):** save a file locally and it's on the server a second later; new
+  folders are created, `.git`/`node_modules`/editor temp files are skipped, half-written files wait
+  until they're complete, and local deletes are never pushed. Also `blamixfiles watch ./site web:/var/www`
+- **Big files resume:** S3 multipart and Nextcloud chunked uploads pick up where they stopped, even
+  after a crash or restart (parts already on the server are checked against your file first)
 - **Command palette (Ctrl+K):** jump to any site, bookmark, sync profile or action
 - **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
 - **Compare & sync:** pick two folders, see every change before it happens (upload, download,
@@ -65,6 +70,7 @@ blamixfiles get  mysite:/var/log/nginx ./logs
 blamixfiles put  ./dist sftp://deploy@example.com/var/www --if-exists newer
 blamixfiles sync ./dist mysite:/var/www --mirror --dry-run     # preview, then drop --dry-run
 blamixfiles sync "Deploy web" --yes                             # a profile saved in the app
+blamixfiles watch ./site mysite:/var/www --ignore "*.map"       # upload every change, Ctrl+C to stop
 blamixfiles import filezilla
 ```
 

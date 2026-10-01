@@ -9,14 +9,20 @@ username = access key, password = secret key, s3_region (optional).
 """
 from __future__ import annotations
 
+import hashlib
 import io
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timezone
 from typing import BinaryIO
 
 from ..vfs import Backend, BackendError, Cancelled, Capabilities, Entry, ProgressFn
 
 BLOCK = 256 * 1024
-MULTIPART = 64 * 1024 * 1024
+MULTIPART = 64 * 1024 * 1024        # files this big go up in parts, and can resume
+PART = 16 * 1024 * 1024             # part size (grows for huge files: S3 allows 10,000 parts)
+MAX_PARTS = 10_000
+PARALLEL = 4                        # parts in flight at once
+MB = 1024 * 1024
 
 
 class S3Backend(Backend):
@@ -259,13 +265,19 @@ class S3Backend(Backend):
     def upload(self, fp: BinaryIO, path: str, offset: int = 0,
                progress: ProgressFn | None = None) -> None:
         if offset:
-            raise BackendError("S3 can't resume uploads")
-        from boto3.s3.transfer import TransferConfig
+            raise BackendError("S3 can't append to an object")
         bucket, key = self._split(path)
         if not key:
             raise BackendError("Choose a bucket first: files can't be stored at the top level")
-        cfg = TransferConfig(multipart_threshold=MULTIPART, multipart_chunksize=16 * 1024 * 1024,
-                             max_concurrency=4, use_threads=True)
+        start = fp.tell()
+        fp.seek(0, 2)
+        size = fp.tell() - start
+        fp.seek(start)
+        if size >= MULTIPART:
+            self._multipart(fp, start, size, bucket, key, path, progress)
+            return
+        from boto3.s3.transfer import TransferConfig
+        cfg = TransferConfig(multipart_threshold=max(MULTIPART, size + 1), use_threads=False)
         try:
             self.client.upload_fileobj(fp, bucket, key, Config=cfg,
                                        Callback=(lambda n: progress(n)) if progress else None)
@@ -276,6 +288,149 @@ class S3Backend(Backend):
             if isinstance(inner, Cancelled):
                 raise inner from None
             raise self._error(e, path) from None
+
+    # ---- resumable multipart upload
+    # S3 keeps unfinished multipart uploads (and their parts) until they're completed or
+    # aborted. If a big upload stops (cancel, crash, lost connection, app closed), the
+    # next upload of the same file to the same key finds the unfinished upload, checks
+    # every part it already has against the local file (MD5 = the part's ETag) and only
+    # sends what's missing or different. Nothing is stored locally.
+    @staticmethod
+    def _part_size(size: int) -> int:
+        need = -(-size // MAX_PARTS)
+        return max(PART, -(-need // MB) * MB)
+
+    def _pending(self, bucket: str, key: str) -> list[dict]:
+        out, kw = [], {"Bucket": bucket, "Prefix": key}
+        while True:
+            r = self.client.list_multipart_uploads(**kw)
+            out += [u for u in r.get("Uploads", []) if u.get("Key") == key]
+            if not r.get("IsTruncated"):
+                break
+            kw.update(KeyMarker=r.get("NextKeyMarker"), UploadIdMarker=r.get("NextUploadIdMarker"))
+        out.sort(key=lambda u: u.get("Initiated") or 0, reverse=True)
+        return out
+
+    def _parts(self, bucket: str, key: str, upload_id: str) -> list[dict]:
+        out, kw = [], {"Bucket": bucket, "Key": key, "UploadId": upload_id}
+        while True:
+            r = self.client.list_parts(**kw)
+            out += r.get("Parts", [])
+            if not r.get("IsTruncated"):
+                break
+            kw["PartNumberMarker"] = r.get("NextPartNumberMarker")
+        return out
+
+    def _resume_point(self, fp, start, size, bucket, key, progress):
+        """(upload_id, part_size, {part_number: etag}) of an unfinished upload we can
+        continue, or (None, part_size, {}) to start a new one."""
+        part_size = self._part_size(size)
+        try:
+            pending = self._pending(bucket, key)
+        except Exception:  # noqa: BLE001 (not allowed to list: just start over)
+            return None, part_size, {}
+        if not pending:
+            return None, part_size, {}
+        upload_id = pending[0]["UploadId"]
+        try:
+            parts = self._parts(bucket, key, upload_id)
+        except Exception:  # noqa: BLE001
+            return None, part_size, {}
+        first = next((p for p in parts if p["PartNumber"] == 1), None)
+        if first is not None and first["Size"] < size:
+            part_size = first["Size"]               # keep the layout the upload was started with
+        count = -(-size // part_size)
+        skip = getattr(progress, "skip", None)
+        good: dict[int, str] = {}
+        for p in sorted(parts, key=lambda p: p["PartNumber"]):
+            n = p["PartNumber"]
+            if n > count:
+                continue
+            length = min(part_size, size - (n - 1) * part_size)
+            if p["Size"] != length:
+                continue
+            fp.seek(start + (n - 1) * part_size)
+            h = hashlib.md5(usedforsecurity=False)
+            left = length
+            while left:
+                chunk = fp.read(min(BLOCK * 4, left))
+                if not chunk:
+                    break
+                h.update(chunk)
+                left -= len(chunk)
+            if h.hexdigest() == p["ETag"].strip('"').lower():
+                good[n] = p["ETag"]
+                if skip:
+                    skip(length)
+        if not good:          # nothing reusable (the file changed, or a different file)
+            self._abort(bucket, key, upload_id)
+            return None, self._part_size(size), {}
+        return upload_id, part_size, good
+
+    def _abort(self, bucket: str, key: str, upload_id: str) -> None:
+        try:
+            self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _multipart(self, fp, start, size, bucket, key, path, progress) -> None:
+        upload_id, part_size, etags = self._resume_point(fp, start, size, bucket, key, progress)
+        try:
+            if upload_id is None:
+                upload_id = self.client.create_multipart_upload(Bucket=bucket, Key=key)["UploadId"]
+        except Exception as e:  # noqa: BLE001
+            raise self._error(e, path) from None
+        count = -(-size // part_size)
+
+        def send(n: int, data: bytes) -> tuple[int, str, int]:
+            r = self.client.upload_part(Bucket=bucket, Key=key, UploadId=upload_id, PartNumber=n, Body=data)
+            return n, r["ETag"], len(data)
+
+        todo = [n for n in range(1, count + 1) if n not in etags]
+        pool = ThreadPoolExecutor(max_workers=PARALLEL, thread_name_prefix="s3-part")
+        running: set = set()
+        try:
+            for n in todo:
+                while len(running) >= PARALLEL:
+                    running = self._collect(running, etags, progress, path)
+                fp.seek(start + (n - 1) * part_size)
+                data = fp.read(min(part_size, size - (n - 1) * part_size))
+                running.add(pool.submit(send, n, data))
+            while running:
+                running = self._collect(running, etags, progress, path)
+        except BaseException:
+            for f in running:
+                f.cancel()
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise                                # the unfinished upload stays: next time resumes it
+        pool.shutdown(wait=True)
+        parts = [{"PartNumber": n, "ETag": etags[n]} for n in sorted(etags)]
+        try:
+            self.client.complete_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id,
+                                                  MultipartUpload={"Parts": parts})
+        except Exception as e:  # noqa: BLE001
+            raise self._error(e, path) from None
+
+    def _collect(self, running: set, etags: dict, progress, path: str) -> set:
+        done, rest = wait(running, return_when=FIRST_COMPLETED)
+        for f in done:
+            try:
+                n, etag, length = f.result()
+            except Exception as e:  # noqa: BLE001
+                raise self._error(e, path) from None
+            etags[n] = etag
+            if progress:
+                progress(length)                 # may raise Cancelled (or wait for the speed limit)
+        return rest
+
+    def abort_unfinished(self, path: str) -> int:
+        """Drop unfinished multipart uploads of this key (they cost storage). Returns how many."""
+        bucket, key = self._split(path)
+        n = 0
+        for u in self._pending(bucket, key):
+            self._abort(bucket, key, u["UploadId"])
+            n += 1
+        return n
 
     def write_bytes(self, path: str, data: bytes, atomic: bool = True) -> None:
         # a PUT replaces the object in one step: no temp file needed

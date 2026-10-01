@@ -16,7 +16,7 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Speed limits (upload/download, also `--limit` in the CLI) |
 | ✅ | Portable builds for Windows, macOS and Linux from CI, `./dev.sh release` |
 | ✅ | Windows MSI installer (all users or just me) |
-| 🗓 | Code signing (Windows, macOS) |
+| 🗓 | Code signing (Windows, macOS): not yet. Options: SignPath Foundation (free for OSS), Azure Artifact Signing (companies in the EU), an OV certificate on a cloud HSM; Apple Developer ID for macOS |
 
 ## Next
 
@@ -28,10 +28,11 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | S3-compatible storage (AWS, MinIO, Backblaze B2, Wasabi, Hetzner, R2) |
 | ✅ | WebDAV (Nextcloud, ownCloud, NAS) |
 | ✅ | SCP |
-| 🗓 | Nextcloud chunked uploads for very large files; resumable S3 multipart uploads |
+| ✅ | Nextcloud chunked uploads for very large files; resumable S3 multipart uploads |
 | ✅ | Jump hosts, "Open SSH terminal here" |
 | ✅ | Drag files from the remote pane to the desktop; folder trees |
 | ✅ | Bookmarks, command palette, tab restore |
+| ✅ | Watch a local folder and upload changes (app and `blamixfiles watch`) |
 | 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line) |
 
 ## Later / maybe
@@ -39,5 +40,4 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | | Feature |
 |---|---|
 | 💡 | Google Drive, Dropbox, OneDrive |
-| 💡 | Watch a local folder and upload changes |
 | 💡 | Terminal UI (like BlamixShell's) |

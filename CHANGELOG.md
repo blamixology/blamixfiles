@@ -7,3 +7,5 @@ survives restarts (with speed limits), a built-in editor that saves straight to 
 compare & sync with a preview of every change, an encrypted vault, FileZilla import and a CLI.
 Also: jump hosts, folder trees, drag to the desktop, checksum verification, bookmarks, a
 command palette, tab restore, FTP keep-alive and a Windows installer.
+Watch a local folder and upload every change (app and `blamixfiles watch`); big S3 and Nextcloud
+uploads resume after a crash or restart; About dialog with "made by Blamixology".

@@ -402,6 +402,16 @@ class TransferEngine:
             job.done += n
             bucket.consume(n, lambda: job.cancel_flag)
             self._emit(job)
+
+        def skip(n: int) -> None:
+            """Bytes the server already had (a resumed S3/Nextcloud upload): they count
+            as done, but not toward the speed or the speed limit."""
+            if job.cancel_flag:
+                raise Cancelled()
+            job.done += n
+            job.resumed_from += n
+            self._emit(job)
+        cb.skip = skip
         return cb
 
     def _verify(self, job: Job, b: Backend) -> None:
