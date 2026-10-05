@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-10-06
+
+- MSI: drop the desktop shortcut (Desktop on another drive broke upgrades, error 1307); create it from the app; updater retries without rollback (09bab84)
+
 ## 0.4.0 - 2026-10-06
 
 - Terminal UI: blamixfiles tui (browse, copy, rename, delete over SSH) (fb06ab1)
