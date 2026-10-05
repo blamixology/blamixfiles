@@ -33,4 +33,6 @@ the CLI uses it too); six themes like BlamixShell plus "follow the system" (View
 - Saved transfer queue, speed limits, release builds for Windows/macOS/Linux (22e6112)
 - BlamixFiles 0.1 dev: SFTP/FTP/FTPS client, queue, editor, vault, CLI, dev.sh (650f015)
 - BlamixFiles 0.1 dev: SFTP/FTP/FTPS client, queue, editor, vault, CLI, dev.sh (6df8140)
-
+Updates: a quiet daily check on GitHub Releases, one-click install for the MSI and portable Windows builds, and
+"Install update from file…" (with SHA-256 check) for computers without internet; admins can switch the check off
+(`BLAMIXFILES_UPDATE_CHECK=off` or `policy.ini`).

@@ -86,6 +86,7 @@ def main() -> None:
     win.keychain_account = account
     win.show()
     win.restore_tabs()
+    win.updates.start()
     _clean_drag_cache()
     sys.exit(app.exec())
 

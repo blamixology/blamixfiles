@@ -38,6 +38,7 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Edit in another app (VS Code, Notepad++, …) with upload on save and conflict check |
 | ✅ | Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) |
 | ✅ | Themes (Midnight, Graphite, Nord, Solarized Dark, Light, High contrast, or follow the system): View → Theme, applies on the next start |
+| ✅ | Updates: daily check on GitHub Releases, one-click install (MSI or portable), "Install update from file…" for offline PCs |
 | 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line; the code is ready, commented out: search for `TODO(BlamixShell)`) |
 
 ## Later / maybe

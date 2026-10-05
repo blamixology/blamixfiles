@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel, Q
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import __version__, keychain
+from .. import __version__, keychain, updater
 from ..core import engine as E
 from ..core.queue_store import QueueStore
 from ..core.vfs import Entry
@@ -339,6 +339,9 @@ class MainWindow(QMainWindow):
             self.engine.restore(restored, paused=True)
             self.queue.offer_resume(len(restored))
         self.sidebar.setVisible(bool(settings["show_sidebar"]))
+        from .update import Updates
+        self.updates = Updates(self)
+        self.force_quit = False             # set by the updater: quit without the "are you sure" questions
         geo = settings["window_geometry"]
         if geo:
             self.restoreGeometry(QByteArray.fromBase64(geo.encode()))
@@ -461,12 +464,27 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda _=False, n=name: self.set_theme(n))
             grp.addAction(a)
         h = mb.addMenu("&Help")
+        act(h, "Check for updates", lambda: self.updates.check(manual=True), None, "refresh")
+        act(h, "Install update from file…", lambda: self.updates.from_file(), None, "import")
+        auto = act(h, "Check for updates automatically", self._set_auto_updates)
+        auto.setCheckable(True)
+        auto.setChecked(updater.updates_allowed(self.settings))
+        auto.setEnabled(updater.update_check_policy() is None)       # an admin policy can lock it
+        h.addSeparator()
         act(h, "BlamixFiles on GitHub", lambda: webbrowser.open(GITHUB), None, "github")
         act(h, "Report a problem", lambda: webbrowser.open(GITHUB + "/issues"), None, "help")
         act(h, "☕ Buy me a coffee", lambda: webbrowser.open(KOFI), None, "coffee")
         act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    def _set_auto_updates(self, on: bool) -> None:
+        self.settings["check_updates"] = bool(on)
+        self.settings.save()
+
+    def unsaved_editors(self) -> list:
+        return [self.tabs.widget(i) for i in range(self.tabs.count())
+                if isinstance(self.tabs.widget(i), EditorTab) and self.tabs.widget(i).dirty]
 
     def toggle_sidebar(self) -> None:
         show = not self.sidebar.isVisible()
@@ -528,6 +546,8 @@ class MainWindow(QMainWindow):
                    ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
                    ("Pause/resume transfers", self.queue._toggle_pause, "pause"),
                    ("Retry failed transfers", lambda: self.engine.retry(), "retry"),
+                   ("Check for updates", lambda: self.updates.check(manual=True), "refresh"),
+                   ("Install update from file", lambda: self.updates.from_file(), "import"),
                    ("Buy me a coffee", lambda: webbrowser.open(KOFI), "coffee")]
         entries += [(t, "action", cb, ic) for t, cb, ic in actions]
         pal = CommandPalette(entries, self, anchor=self.quick)
@@ -1011,10 +1031,9 @@ class MainWindow(QMainWindow):
         style_window(self)
 
     def closeEvent(self, e):  # noqa: N802
-        dirty = [self.tabs.widget(i) for i in range(self.tabs.count())
-                 if isinstance(self.tabs.widget(i), EditorTab) and self.tabs.widget(i).dirty]
+        dirty = self.unsaved_editors()
         busy = self.engine.pending()
-        if dirty or busy:
+        if (dirty or busy) and not self.force_quit:
             parts = []
             if dirty:
                 parts.append(f"{len(dirty)} unsaved file(s)")

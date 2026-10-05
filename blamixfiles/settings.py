@@ -20,6 +20,9 @@ DEFAULTS = {
     "open_tabs": [],
     "theme": "Midnight",       # a theme name or "System" (applies on the next start)
     "show_sidebar": True,      # the server list on the left
+    "check_updates": True,     # daily check against GitHub Releases (an admin policy can lock it off)
+    "last_update_check": 0,
+    "skip_version": "",        # "Skip this version" in the update dialog
     "external_editor": "",     # program for "Edit in another app" ("" = the system default app)
 }
 
