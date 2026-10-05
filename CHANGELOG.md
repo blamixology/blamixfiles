@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-05
+
+- Six themes; hide the server list (Ctrl+B); own tab close button (12d0bd6)
+- File list: dotfiles were drawn black on dark; use the muted theme color (c2e3858)
+
 ## 0.1.0 - 2026-10-05
 
 First release: SFTP, SCP, FTP/FTPS, WebDAV and S3 client with a dual-pane browser, a transfer queue that
