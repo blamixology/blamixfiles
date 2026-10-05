@@ -18,7 +18,7 @@ DEFAULTS = {
     "show_tree": True,         # folder tree above each file list
     "restore_tabs": True,      # reopen site tabs (and their folders) on start
     "open_tabs": [],
-    "theme": "Midnight",       # a theme name or "System" (applies on the next start)
+    "theme": "Midnight",       # a theme name or "System"
     "show_sidebar": True,      # the server list on the left
     "check_updates": True,     # daily check against GitHub Releases (an admin policy can lock it off)
     "last_update_check": 0,

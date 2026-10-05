@@ -47,6 +47,7 @@ _dark = True
 
 
 _cache: dict[tuple, QIcon] = {}
+_icon_meta: dict[int, tuple] = {}      # QIcon.cacheKey() -> how it was made, so retheme() can redo it
 
 
 def theme_names() -> list[str]:
@@ -69,15 +70,19 @@ def system_is_dark(app=None) -> bool:
         return True
 
 
+def resolve(name: str, app=None) -> str:
+    """A setting value ("System", an old "dark"/"light", a theme name) -> a real theme name."""
+    name = _LEGACY.get(name, name)
+    if name == SYSTEM:
+        name = "Midnight" if system_is_dark(app) else "Light"
+    return name if name in THEMES else DEFAULT_THEME
+
+
 def set_theme(name: str, app=None) -> str:
     """Make a theme active (it has to run before any widget or module-level color table is built).
     Accepts a theme name, "System", or the old "dark"/"light"/"system". Returns the name used."""
     global CURRENT, _dark
-    name = _LEGACY.get(name, name)
-    if name == SYSTEM:
-        name = "Midnight" if system_is_dark(app) else "Light"
-    if name not in THEMES:
-        name = DEFAULT_THEME
+    name = resolve(name, app)
     t = THEMES[name]
     c = dict(t["colors"])
     dark = t["dark"]
@@ -316,6 +321,7 @@ def icon(name: str, color: str | None = None, size: int = 18) -> QIcon:
         pm.setDevicePixelRatio(scale)
         ico.addPixmap(pm)
     _cache[key] = ico
+    _icon_meta[ico.cacheKey()] = (name, color, size)
     return ico
 
 
@@ -334,11 +340,13 @@ def star_icon(filled: bool, size: int = 16) -> QIcon:
     p.end()
     pm.setDevicePixelRatio(2)
     _cache[key] = QIcon(pm)
+    _icon_meta[_cache[key].cacheKey()] = ("@star", filled, size)
     return _cache[key]
 
 
 def apply_palette(app) -> None:
-    app.setStyle("Fusion")
+    if app.style().objectName().lower() != "fusion":      # re-setting it frees a style live widgets still use
+        app.setStyle("Fusion")
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(C["bg"]))
     pal.setColor(QPalette.WindowText, QColor(C["text"]))
@@ -360,6 +368,91 @@ def apply_palette(app) -> None:
     if FONT_SCALE != 1.0:
         qss = re.sub(r"(\d+(?:\.\d+)?)pt", lambda m: f"{float(m.group(1)) * FONT_SCALE:.1f}pt", qss)
     app.setStyleSheet(qss)
+
+
+def retheme(old: dict[str, str]) -> None:
+    """After set_theme(): re-color what is already on screen. Inline widget styles and rich-text labels
+    get the new colors (each old color maps to the new theme's color of the same name), icons are
+    re-made in the new colors, and what is painted straight from `C` follows on its next repaint."""
+    from PySide6.QtWidgets import (QAbstractButton, QApplication, QLabel, QListWidget, QTabBar, QTreeWidget,
+                                   QTreeWidgetItem)
+    mapping = {old[k].lower(): C[k] for k in old if k in C and old[k].lower() != C[k].lower()}
+    if not mapping:
+        return
+    rx = re.compile("|".join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)), re.I)
+
+    def recolor(text: str) -> str:
+        return rx.sub(lambda m: mapping[m.group(0).lower()], text)
+
+    def remake(ico: QIcon) -> QIcon | None:
+        meta = _icon_meta.get(ico.cacheKey()) if not ico.isNull() else None
+        if not meta:
+            return None
+        if meta[0] == "@star":
+            return star_icon(meta[1], meta[2])
+        name, color, size = meta
+        return icon(name, mapping.get(color.lower(), color), size)
+
+    def tree_items(parent):
+        for i in range(parent.childCount() if isinstance(parent, QTreeWidgetItem) else parent.topLevelItemCount()):
+            item = parent.child(i) if isinstance(parent, QTreeWidgetItem) else parent.topLevelItem(i)
+            yield item
+            yield from tree_items(item)
+
+    for w in QApplication.allWidgets():
+        ss = w.styleSheet()
+        if ss:
+            new = recolor(ss)
+            if new != ss:
+                w.setStyleSheet(new)
+        if isinstance(w, QLabel):
+            text = w.text()
+            if text and ("#" in text or "rgba(" in text):
+                new = recolor(text)
+                if new != text:
+                    w.setText(new)
+        if isinstance(w, QAbstractButton):
+            ico = remake(w.icon())
+            if ico is not None:
+                w.setIcon(ico)
+        elif isinstance(w, QTabBar):
+            for i in range(w.count()):
+                ico = remake(w.tabIcon(i))
+                if ico is not None:
+                    w.setTabIcon(i, ico)
+        elif isinstance(w, QTreeWidget):
+            for item in tree_items(w):
+                for col in range(w.columnCount()):
+                    ico = remake(item.icon(col))
+                    if ico is not None:
+                        item.setIcon(col, ico)
+                    fg = item.foreground(col).color()
+                    if item.foreground(col).style() != Qt.NoBrush and fg.name().lower() in mapping:
+                        item.setForeground(col, QColor(mapping[fg.name().lower()]))
+        elif isinstance(w, QListWidget):
+            for i in range(w.count()):
+                ico = remake(w.item(i).icon())
+                if ico is not None:
+                    w.item(i).setIcon(ico)
+        for act in w.actions():
+            ico = remake(act.icon())
+            if ico is not None:
+                act.setIcon(ico)
+    for w in QApplication.topLevelWidgets():          # the title bars follow (Windows)
+        if w.isVisible():
+            style_window(w)
+            w.update()
+
+
+def switch_theme(app, name: str) -> str:
+    """Change the theme of the running app. Returns the theme now in use."""
+    old = dict(C)
+    target = resolve(name, app)
+    if target != CURRENT:
+        set_theme(target)
+        apply_palette(app)
+        retheme(old)
+    return target
 
 
 def style_window(widget) -> None:

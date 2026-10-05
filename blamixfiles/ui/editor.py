@@ -187,6 +187,11 @@ class Highlighter(QSyntaxHighlighter):
         self._cache[ttype] = f
         return f
 
+    def restyle(self) -> None:
+        """After a theme change: forget the cached colors and paint the text again."""
+        self._cache.clear()
+        self.rehighlight()
+
     def start(self) -> None:
         doc = self.document()
         self.full = self.lexer is not None and doc.characterCount() < FULL_LEX_LIMIT
@@ -498,6 +503,14 @@ class EditorTab(QWidget):
     message = Signal(str, bool)
     saved = Signal(str)                  # path
     open_external = Signal()             # "open this file in another app"
+
+    def restyle(self) -> None:
+        """After a theme change: syntax colors, current-line highlight and gutter."""
+        hl = getattr(self, "hl", None)
+        if hl is not None:
+            hl.restyle()
+        self.ed._highlight_line()
+        self.ed.viewport().update()
 
     def __init__(self, session: Session, entry: Entry, parent=None):
         super().__init__(parent)

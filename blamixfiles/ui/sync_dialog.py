@@ -15,9 +15,15 @@ from .bridge import on_ui
 from .fmt import human_size, human_time
 from .theme import C, icon, style_window
 
-COLORS = {S.UPLOAD: C["accent"], S.DOWNLOAD: C["accent2"], S.MKDIR_REMOTE: C["muted"],
-          S.MKDIR_LOCAL: C["muted"], S.DELETE_REMOTE: C["danger"], S.DELETE_LOCAL: C["danger"],
-          S.CONFLICT: C["warn"]}
+
+
+def kind_color(kind) -> str:
+    """Looked up on use, so a theme change shows up in the next rows."""
+    return {S.UPLOAD: C["accent"], S.DOWNLOAD: C["accent2"], S.MKDIR_REMOTE: C["muted"],
+            S.MKDIR_LOCAL: C["muted"], S.DELETE_REMOTE: C["danger"], S.DELETE_LOCAL: C["danger"],
+            S.CONFLICT: C["warn"]}[kind]
+
+
 ICONS = {S.UPLOAD: "upload", S.DOWNLOAD: "download", S.MKDIR_REMOTE: "folder-plus",
          S.MKDIR_LOCAL: "folder-plus", S.DELETE_REMOTE: "trash", S.DELETE_LOCAL: "trash", S.CONFLICT: "help"}
 
@@ -209,8 +215,8 @@ class SyncDialog(QDialog):
             it = QTreeWidgetItem([S.ACTION_LABELS[a.kind], a.rel + ("/" if a.is_dir else ""),
                                   self._describe(a.local), self._describe(a.remote), a.reason])
             it.setData(0, Qt.UserRole, a)
-            it.setIcon(0, icon(ICONS[a.kind], COLORS[a.kind], 16))
-            it.setForeground(0, QColor(COLORS[a.kind]))
+            it.setIcon(0, icon(ICONS[a.kind], kind_color(a.kind), 16))
+            it.setForeground(0, QColor(kind_color(a.kind)))
             if a.kind == S.CONFLICT:
                 a.enabled = False
                 it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable)

@@ -13,7 +13,9 @@ from .theme import C, icon
 
 STATUS_TEXT = {E.QUEUED: "Queued", E.RUNNING: "Transferring", E.DONE: "Done", E.FAILED: "Failed",
                E.SKIPPED: "Skipped (exists)", E.CANCELLED: "Cancelled"}
-STATUS_COLOR = {E.DONE: C["ok"], E.FAILED: C["danger"], E.CANCELLED: C["faint"], E.SKIPPED: C["muted"]}
+def status_color(status: str, default: str) -> str:
+    """Looked up on use, so a theme change shows up in the next update."""
+    return {E.DONE: C["ok"], E.FAILED: C["danger"], E.CANCELLED: C["faint"], E.SKIPPED: C["muted"]}.get(status, default)
 
 
 class _BarDelegate(QStyledItemDelegate):
@@ -221,7 +223,7 @@ class QueueView(QWidget):
         it.setText(2, "" if job.is_dir else human_size(job.size))
         frac = 1.0 if job.status == E.DONE else (job.done / job.size if job.size else 0.0)
         it.setData(3, Qt.UserRole, None if job.is_dir else frac)
-        it.setData(3, Qt.UserRole + 1, STATUS_COLOR.get(job.status, C["accent"]))
+        it.setData(3, Qt.UserRole + 1, status_color(job.status, C["accent"]))
         it.setText(4, human_speed(job.speed) if job.status == E.RUNNING else "")
         status = job.error or STATUS_TEXT.get(job.status, job.status)
         if job.status == E.DONE and job.verified:
@@ -231,7 +233,7 @@ class QueueView(QWidget):
             status = job.error
         it.setText(5, status)
         it.setToolTip(5, status)
-        it.setForeground(5, QColor(STATUS_COLOR.get(job.status, C["text"])))
+        it.setForeground(5, QColor(status_color(job.status, C["text"])))
         self.tree.viewport().update()
         self._update_summary()
 

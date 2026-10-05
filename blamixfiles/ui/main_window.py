@@ -8,7 +8,7 @@ import webbrowser
 
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -339,6 +339,10 @@ class MainWindow(QMainWindow):
             self.engine.restore(restored, paused=True)
             self.queue.offer_resume(len(restored))
         self.sidebar.setVisible(bool(settings["show_sidebar"]))
+        try:                                   # "Follow the system" also follows the OS while the app runs
+            QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
+        except AttributeError:
+            pass
         from .update import Updates
         self.updates = Updates(self)
         self.force_quit = False             # set by the updater: quit without the "are you sure" questions
@@ -503,9 +507,22 @@ class MainWindow(QMainWindow):
         self.settings.save()
 
     def set_theme(self, name: str) -> None:
+        """Switch the running app to a theme and remember the choice."""
         self.settings["theme"] = name
         self.settings.save()
-        QMessageBox.information(self, "Theme", "The theme changes the next time you start BlamixFiles.")
+        self.apply_theme(name)
+
+    def apply_theme(self, name: str) -> None:
+        theme.switch_theme(QApplication.instance(), name)
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if isinstance(w, EditorTab):
+                w.restyle()
+        self.show_message(f"Theme: {theme.CURRENT}")
+
+    def _system_scheme_changed(self, *_args) -> None:
+        if theme.canonical(self.settings["theme"]) == theme.SYSTEM:
+            self.apply_theme(theme.SYSTEM)
 
     # ---- unlock with the OS keychain
     def _keychain_saved(self) -> bool:
