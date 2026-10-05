@@ -25,12 +25,16 @@ def test_account_is_per_vault(tmp_path):
     assert a != b and a == keychain.account_for(tmp_path / "a.bfv")
 
 
-def test_theme_tokens_match():
+def test_themes():
     from blamixfiles.ui import theme
-    assert theme.DARK.keys() == theme.LIGHT.keys()
-    assert theme.set_theme("light") == "light" and theme.C["bg"] == theme.LIGHT["bg"]
-    assert not theme.is_dark()
-    assert theme.set_theme("dark") == "dark" and theme.is_dark()
-    assert theme.set_theme("system") in ("dark", "light")
-    theme.set_theme("dark")
-    assert "#" in theme.build_qss() and "{C[" not in theme.build_qss()
+    keys = set(theme.THEMES["Midnight"]["colors"])
+    for name, t in theme.THEMES.items():
+        assert set(t["colors"]) == keys, name
+        assert theme.set_theme(name) == name and theme.C["bg"] == t["colors"]["bg"]
+        assert theme.is_dark() == t["dark"]
+        qss = theme.build_qss()
+        assert "{C[" not in qss and "None" not in qss
+    assert theme.set_theme("light") == "Light" and not theme.is_dark()      # old setting values
+    assert theme.set_theme("dark") == "Midnight"
+    assert theme.set_theme(theme.SYSTEM) in ("Midnight", "Light")
+    assert theme.set_theme("nonsense") == theme.DEFAULT_THEME

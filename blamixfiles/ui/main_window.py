@@ -6,10 +6,10 @@ import os
 import time
 import webbrowser
 
-from PySide6.QtCore import QByteArray, Qt, QTimer
+from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
-                               QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
+                               QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import __version__, keychain
@@ -26,6 +26,7 @@ from .editor import EditorTab
 from .file_pane import FilePane
 from .queue_view import QueueView
 from .session import Session
+from . import theme
 from .theme import C, icon, style_window
 
 from ..links import COMPANY, COMPANY_URL, KOFI_URL as KOFI, REPO_URL as GITHUB
@@ -223,6 +224,35 @@ class SiteTab(QWidget):
         self.remote_session.close()
 
 
+class _Tabs(QTabWidget):
+    """Tabs with a close button we draw ourselves: the native one can't be centered or themed reliably."""
+
+    def tabInserted(self, index: int) -> None:  # noqa: N802
+        super().tabInserted(index)
+        btn = QToolButton(objectName="TabClose", toolTip="Close tab")
+        btn.setIcon(icon("x", C["muted"], 14))
+        btn.setIconSize(QSize(14, 14))
+        btn.setFixedSize(20, 20)
+        btn.setCursor(Qt.ArrowCursor)
+        btn.clicked.connect(lambda _=False, b=btn: self._close_for(b))
+        # the tab style has 6 px of margin above the label, so the bar centers the button a little
+        # too high: park it low inside a small holder (which stays shorter than the tab itself)
+        holder = QWidget()
+        holder.setFixedSize(20, 24)
+        btn.setParent(holder)
+        btn.move(0, 6)
+        holder.btn = btn
+        self.tabBar().setTabButton(index, QTabBar.RightSide, holder)
+
+    def _close_for(self, btn) -> None:
+        bar = self.tabBar()
+        for i in range(bar.count()):
+            holder = bar.tabButton(i, QTabBar.RightSide)
+            if holder is not None and getattr(holder, "btn", None) is btn:
+                self.tabCloseRequested.emit(i)
+                return
+
+
 class MainWindow(QMainWindow):
     def __init__(self, store: Store, settings: Settings):
         super().__init__()
@@ -252,7 +282,8 @@ class MainWindow(QMainWindow):
         rl = QHBoxLayout(root)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(0)
-        rl.addWidget(self._build_sidebar())
+        self.sidebar = self._build_sidebar()
+        rl.addWidget(self.sidebar)
 
         right = QWidget()
         vl = QVBoxLayout(right)
@@ -261,6 +292,10 @@ class MainWindow(QMainWindow):
         qc = QWidget(objectName="Toolbar")
         ql = QHBoxLayout(qc)
         ql.setContentsMargins(10, 8, 10, 8)
+        self.sidebar_btn = QToolButton(toolTip="Show/hide the server list (Ctrl+B)")
+        self.sidebar_btn.setIcon(icon("sidebar"))
+        self.sidebar_btn.clicked.connect(self.toggle_sidebar)
+        ql.addWidget(self.sidebar_btn)
         self.quick = QLineEdit(placeholderText="Quick connect:  sftp://user@host/path   ftp://…   ftps://…   "
                                                "(Ctrl+L)")
         self.quick.returnPressed.connect(self.quick_connect)
@@ -270,8 +305,7 @@ class MainWindow(QMainWindow):
         ql.addWidget(go)
         vl.addWidget(qc)
 
-        self.tabs = QTabWidget()
-        self.tabs.setTabsClosable(True)
+        self.tabs = _Tabs()
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
@@ -304,6 +338,7 @@ class MainWindow(QMainWindow):
         if restored:
             self.engine.restore(restored, paused=True)
             self.queue.offer_resume(len(restored))
+        self.sidebar.setVisible(bool(settings["show_sidebar"]))
         geo = settings["window_geometry"]
         if geo:
             self.restoreGeometry(QByteArray.fromBase64(geo.encode()))
@@ -414,14 +449,16 @@ class MainWindow(QMainWindow):
         self.reload_profiles()
         v = mb.addMenu("&View")
         act(v, "Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "Ctrl+J")
+        act(v, "Show/hide server list", self.toggle_sidebar, "Ctrl+B")
         act(v, "Show/hide folder trees", self.toggle_trees, "Ctrl+T")
         tm = v.addMenu("Theme")
         grp = QActionGroup(self)
-        for key, label in (("system", "Follow the system"), ("dark", "Dark"), ("light", "Light")):
-            a = tm.addAction(label)
+        current = theme.canonical(self.settings["theme"])
+        for name in theme.theme_names():
+            a = tm.addAction("Follow the system" if name == theme.SYSTEM else name)
             a.setCheckable(True)
-            a.setChecked(self.settings["theme"] == key)
-            a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+            a.setChecked(name == current)
+            a.triggered.connect(lambda _=False, n=name: self.set_theme(n))
             grp.addAction(a)
         h = mb.addMenu("&Help")
         act(h, "BlamixFiles on GitHub", lambda: webbrowser.open(GITHUB), None, "github")
@@ -430,6 +467,12 @@ class MainWindow(QMainWindow):
         act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    def toggle_sidebar(self) -> None:
+        show = not self.sidebar.isVisible()
+        self.sidebar.setVisible(show)
+        self.settings["show_sidebar"] = show
+        self.settings.save()
 
     def set_theme(self, name: str) -> None:
         self.settings["theme"] = name
@@ -480,6 +523,7 @@ class MainWindow(QMainWindow):
                    ("Import from WinSCP", self.import_winscp, "import"),
                    ("Import from BlamixShell", self.import_blamixshell, "import"),
                    ("Watch local folder & upload changes (current tab)", self.toggle_watch, "eye"),
+                   ("Show/hide server list", self.toggle_sidebar, "sidebar"),
                    ("Show/hide folder trees", self.toggle_trees, "folder"),
                    ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
                    ("Pause/resume transfers", self.queue._toggle_pause, "pause"),

@@ -18,7 +18,8 @@ DEFAULTS = {
     "show_tree": True,         # folder tree above each file list
     "restore_tabs": True,      # reopen site tabs (and their folders) on start
     "open_tabs": [],
-    "theme": "dark",           # "dark", "light" or "system" (applies on the next start)
+    "theme": "Midnight",       # a theme name or "System" (applies on the next start)
+    "show_sidebar": True,      # the server list on the left
     "external_editor": "",     # program for "Edit in another app" ("" = the system default app)
 }
 

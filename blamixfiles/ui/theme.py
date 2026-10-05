@@ -9,66 +9,59 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-DARK = {
-    "bg": "#0b0d12",
-    "sidebar": "#10131a",
-    "surface": "#151923",
-    "surface2": "#1b2030",
-    "hover": "#222839",
-    "border": "#232838",
-    "text": "#e6e9f2",
-    "muted": "#8a92a8",
-    "faint": "#5b6378",
-    "accent": "#7c8cff",
-    "accent2": "#a78bfa",
-    "ok": "#3ddc97",
-    "warn": "#ffc857",
-    "danger": "#ff5d73",
-    # derived tokens
-    "on_accent": "#0b0d12",       # text/icons on a filled accent button
-    "accent_hover": "#95a2ff",
-    "selected": "#2a3354",        # selected row in an active list
-    "banner": "#1d2440",
-    "code_sel": "#2c3a5c",
-    "line_hl": "#141925",         # current line in the editor
-    "overlay": "rgba(11,13,18,215)",
+# Interface themes, the same set as BlamixShell. `C` holds the colors of the active one (modules
+# share this dict, so it is changed in place); the theme is picked at startup.
+THEMES: dict[str, dict] = {
+    "Midnight": {"dark": True, "colors": {
+        "bg": "#0b0d12", "sidebar": "#10131a", "surface": "#151923", "surface2": "#1b2030", "hover": "#222839",
+        "border": "#232838", "text": "#e6e9f2", "muted": "#8a92a8", "faint": "#5b6378", "accent": "#7c8cff",
+        "accent2": "#a78bfa", "ok": "#3ddc97", "warn": "#ffc857", "danger": "#ff5d73", "on_accent": "#0a0c11"}},
+    "Graphite": {"dark": True, "colors": {
+        "bg": "#121212", "sidebar": "#171717", "surface": "#1e1e1e", "surface2": "#262626", "hover": "#2f2f2f",
+        "border": "#333333", "text": "#e8e8e8", "muted": "#a0a0a0", "faint": "#6b6b6b", "accent": "#5aa0ff",
+        "accent2": "#b48ead", "ok": "#4cd38a", "warn": "#ffcb6b", "danger": "#ff6b6b", "on_accent": "#0a0a0a"}},
+    "Nord": {"dark": True, "colors": {
+        "bg": "#2e3440", "sidebar": "#2b303b", "surface": "#3b4252", "surface2": "#434c5e", "hover": "#4c566a",
+        "border": "#58637a", "text": "#eceff4", "muted": "#bcc6d8", "faint": "#7f8aa0", "accent": "#88c0d0",
+        "accent2": "#b48ead", "ok": "#a3be8c", "warn": "#ebcb8b", "danger": "#e07a85", "on_accent": "#2d3340"}},
+    "Solarized Dark": {"dark": True, "colors": {
+        "bg": "#002b36", "sidebar": "#00252e", "surface": "#073642", "surface2": "#0b4452", "hover": "#124b5a",
+        "border": "#0f4a58", "text": "#eee8d5", "muted": "#a6b3b3", "faint": "#6f878f", "accent": "#4aa3e8",
+        "accent2": "#8a8fe0", "ok": "#9db300", "warn": "#d4a017", "danger": "#ff6b66", "on_accent": "#012c37"}},
+    "Light": {"dark": False, "colors": {
+        "bg": "#f4f5f8", "sidebar": "#eceef3", "surface": "#ffffff", "surface2": "#f0f2f7", "hover": "#e4e8f0",
+        "border": "#d8dce6", "text": "#1d2433", "muted": "#5b6478", "faint": "#8a92a6", "accent": "#4f5fe8",
+        "accent2": "#7c5cf0", "ok": "#1a9f6a", "warn": "#b7791f", "danger": "#d63a4f", "on_accent": "#fefeff"}},
+    "High contrast": {"dark": True, "colors": {
+        "bg": "#000000", "sidebar": "#0a0a0a", "surface": "#111111", "surface2": "#1a1a1a", "hover": "#2a2a2a",
+        "border": "#6b6b6b", "text": "#ffffff", "muted": "#d0d0d0", "faint": "#a0a0a0", "accent": "#ffd400",
+        "accent2": "#00e5ff", "ok": "#00ff7f", "warn": "#ffb000", "danger": "#ff4d4d", "on_accent": "#010101"}},
 }
+DEFAULT_THEME = "Midnight"
+SYSTEM = "System"                      # follow the OS light/dark setting (Midnight / Light)
+_LEGACY = {"dark": "Midnight", "light": "Light", "system": SYSTEM}
 
-LIGHT = {
-    "bg": "#f6f7fb",
-    "sidebar": "#eceef5",
-    "surface": "#ffffff",
-    "surface2": "#f0f2f8",
-    "hover": "#e4e8f3",
-    "border": "#d8dce8",
-    "text": "#1b2030",
-    "muted": "#5b6378",
-    "faint": "#8a92a8",
-    "accent": "#4f5fe0",
-    "accent2": "#7c4dff",
-    "ok": "#12935d",
-    "warn": "#b7791f",
-    "danger": "#d6334c",
-    "on_accent": "#ffffff",
-    "accent_hover": "#6573ea",
-    "selected": "#d5dcfb",
-    "banner": "#e4e8fd",
-    "code_sel": "#cbd5f7",
-    "line_hl": "#eef1fa",
-    "overlay": "rgba(246,247,251,225)",
-}
+C: dict[str, str] = {}
+CURRENT = DEFAULT_THEME
+_dark = True
 
-THEMES = ("system", "dark", "light")
 
-# One shared dict: modules do `from .theme import C`, so set_theme() updates it in place.
-# It has to run before any widget (or module-level color table) is built.
-C = dict(DARK)
-_current = "dark"
+_cache: dict[tuple, QIcon] = {}
+
+
+def theme_names() -> list[str]:
+    return [SYSTEM, *THEMES]
+
+
+def blend(base: str, color: str, amount: float) -> str:
+    """Mix `color` into `base` (0 = base, 1 = color)."""
+    a, b = QColor(base), QColor(color)
+    mix = lambda x, y: round(x + (y - x) * amount)  # noqa: E731
+    return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue())).name()
 
 
 def system_is_dark(app=None) -> bool:
     try:
-        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
         app = app or QApplication.instance()
         return app.styleHints().colorScheme() != Qt.ColorScheme.Light
@@ -77,20 +70,41 @@ def system_is_dark(app=None) -> bool:
 
 
 def set_theme(name: str, app=None) -> str:
-    """Select 'system' / 'dark' / 'light'; returns the resolved 'dark' or 'light'."""
-    global _current
+    """Make a theme active (it has to run before any widget or module-level color table is built).
+    Accepts a theme name, "System", or the old "dark"/"light"/"system". Returns the name used."""
+    global CURRENT, _dark
+    name = _LEGACY.get(name, name)
+    if name == SYSTEM:
+        name = "Midnight" if system_is_dark(app) else "Light"
     if name not in THEMES:
-        name = "system"
-    resolved = ("dark" if system_is_dark(app) else "light") if name == "system" else name
+        name = DEFAULT_THEME
+    t = THEMES[name]
+    c = dict(t["colors"])
+    dark = t["dark"]
+    c["accent_hover"] = blend(c["accent"], "#ffffff" if dark else "#000000", 0.18 if dark else 0.14)
+    c["selected"] = blend(c["surface"], c["accent"], 0.25 if dark else 0.2)     # selected row, active list
+    c["banner"] = blend(c["bg"], c["accent"], 0.15)
+    c["code_sel"] = blend(c["bg"], c["accent"], 0.3)
+    c["line_hl"] = blend(c["bg"], c["text"], 0.05)                              # editor current line
+    bg = QColor(c["bg"])
+    c["overlay"] = f"rgba({bg.red()},{bg.green()},{bg.blue()},215)"
     C.clear()
-    C.update(DARK if resolved == "dark" else LIGHT)
-    _current = resolved
-    return resolved
+    C.update(c)
+    _cache.clear()
+    CURRENT, _dark = name, dark
+    return name
+
+
+def canonical(name: str) -> str:
+    """Old setting values ("dark", "light", "system") -> current names."""
+    return _LEGACY.get(name, name)
 
 
 def is_dark() -> bool:
-    return _current == "dark"
+    return _dark
 
+
+set_theme(DEFAULT_THEME)
 
 UI_FONT = "Segoe UI Variable Text"
 
@@ -172,11 +186,8 @@ QTabBar::tab {{ background: transparent; color: {C['muted']}; padding: 9px 10px 
   border-top-left-radius: 10px; border-top-right-radius: 10px; min-width: 90px; }}
 QTabBar::tab:selected {{ background: {C['surface']}; color: {C['text']}; }}
 QTabBar::tab:hover:!selected {{ background: {C['sidebar']}; color: {C['text']}; }}
-QTabBar::close-button {{ subcontrol-position: right; image: url(__ASSETS__/close.svg); width: 16px; height: 16px;
-  border-radius: 5px; }}
 QToolButton#TabClose {{ padding: 0; border-radius: 6px; }}
 QToolButton#TabClose:hover {{ background: {C['hover']}; }}
-QTabBar::close-button:hover {{ image: url(__ASSETS__/close-hover.svg); background: {C['hover']}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {C['border']}; border-radius: 4px; min-height: 30px; }}
@@ -283,7 +294,6 @@ _ICONS = {
     "folder-plus": '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/>',
 }
 
-_cache: dict[tuple, QIcon] = {}
 
 
 def icon(name: str, color: str | None = None, size: int = 18) -> QIcon:

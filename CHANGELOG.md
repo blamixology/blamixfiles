@@ -14,7 +14,7 @@ uploads resume after a crash or restart; About dialog with "made by Blamixology"
 Import from WinSCP and BlamixShell; FTP server time zone correction; edit files in another app
 (VS Code, Notepad++, …) with upload on save.
 Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service;
-the CLI uses it too); light theme and "follow the system" (View → Theme).
+the CLI uses it too); six themes like BlamixShell plus "follow the system" (View → Theme); the server list can be hidden (Ctrl+B).
 
 - dev.sh release: force UTF-8 so commit subjects with arrows don't crash on Windows (9cecdfa)
 - Unlock vault with OS keychain; light and system theme; Open in BlamixShell prepared (commented out) (06ecce5)
