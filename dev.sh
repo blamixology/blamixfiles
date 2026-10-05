@@ -212,7 +212,7 @@ cmd_release() {
   [ -n "$notes" ] || die "Nothing new since ${last:-the start}."
 
   local entry
-  entry=$("$VPY" - "$version" "$notes" <<'PY'
+  entry=$(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 "$VPY" - "$version" "$notes" <<'PY'
 import datetime, re, sys
 version, notes = sys.argv[1], sys.argv[2]
 text = open("CHANGELOG.md", encoding="utf-8").read()
