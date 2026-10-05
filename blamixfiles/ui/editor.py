@@ -19,7 +19,7 @@ from ..core.vfs import Entry
 from .fmt import human_size
 from .platform_ui import MONO_DEFAULT
 from .session import Session
-from .theme import C, icon
+from .theme import C, icon, is_dark
 
 FULL_LEX_LIMIT = 1_000_000     # whole-document lexing (correct multi-line strings/comments) below this
 COMPARE_LIMIT = 2_000_000      # before saving, compare the server copy byte-for-byte up to this size
@@ -54,6 +54,37 @@ _STYLE = {
     "Generic.Emph": ("", False, True),
     "Generic.Strong": ("", True, False),
     "Error": ("#ff5d73", False, False),
+}
+
+_STYLE_LIGHT = {
+    "Comment": ("#6a7490", False, True),
+    "Comment.Preproc": ("#7c3aed", False, False),
+    "Keyword": ("#7c3aed", False, False),
+    "Keyword.Constant": ("#b45309", False, False),
+    "Keyword.Type": ("#0e7490", False, False),
+    "Name.Builtin": ("#0e7490", False, False),
+    "Name.Function": ("#2952cc", False, False),
+    "Name.Class": ("#92710a", False, False),
+    "Name.Decorator": ("#0e7490", False, False),
+    "Name.Tag": ("#c4243b", False, False),
+    "Name.Attribute": ("#92710a", False, False),
+    "Name.Variable": ("#b8324a", False, False),
+    "Name.Constant": ("#b45309", False, False),
+    "Name.Namespace": ("#92710a", False, False),
+    "Name.Label": ("#2952cc", False, False),
+    "Literal.String": ("#15803d", False, False),
+    "Literal.String.Escape": ("#b45309", False, False),
+    "Literal.String.Interpol": ("#b45309", False, False),
+    "Literal.Number": ("#b45309", False, False),
+    "Literal": ("#b45309", False, False),
+    "Operator.Word": ("#7c3aed", False, False),
+    "Generic.Heading": ("#2952cc", True, False),
+    "Generic.Subheading": ("#2952cc", True, False),
+    "Generic.Inserted": ("#15803d", False, False),
+    "Generic.Deleted": ("#c4243b", False, False),
+    "Generic.Emph": ("", False, True),
+    "Generic.Strong": ("", True, False),
+    "Error": ("#d6334c", False, False),
 }
 
 # line comment prefix by Pygments lexer name (for Ctrl+/)
@@ -139,7 +170,7 @@ class Highlighter(QSyntaxHighlighter):
         t = ttype
         spec = None
         while t is not None and len(t):
-            spec = _STYLE.get(".".join(t))
+            spec = (_STYLE if is_dark() else _STYLE_LIGHT).get(".".join(t))
             if spec:
                 break
             t = t.parent
@@ -265,7 +296,7 @@ class CodeEditor(QPlainTextEdit):
 
     def _highlight_line(self) -> None:
         sel = QTextEdit.ExtraSelection()
-        sel.format.setBackground(QColor("#141925"))
+        sel.format.setBackground(QColor(C["line_hl"]))
         sel.format.setProperty(QTextFormat.FullWidthSelection, True)
         sel.cursor = self.textCursor()
         sel.cursor.clearSelection()
@@ -491,7 +522,7 @@ class EditorTab(QWidget):
         bl.addWidget(where, 1)
         if session.site is not None and session.site.production:
             bl.addWidget(QLabel("PRODUCTION", objectName="Prod"))
-        self.save_btn = QPushButton(icon("save", "#0b0d12"), " Save", objectName="Primary")
+        self.save_btn = QPushButton(icon("save", C["on_accent"]), " Save", objectName="Primary")
         self.save_btn.clicked.connect(self.save)
         self.save_btn.setEnabled(False)
         bl.addWidget(self.save_btn)

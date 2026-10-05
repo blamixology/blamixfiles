@@ -81,7 +81,7 @@ class SyncDialog(QDialog):
         self.excludes.setToolTip("Names or paths to leave out, comma separated. Wildcards work: *.log, cache/*")
         ex.addWidget(self.excludes, 1)
         self.tolerance = opt.tolerance
-        self.compare_btn = QPushButton(icon("refresh", "#0b0d12"), " Compare", objectName="Primary")
+        self.compare_btn = QPushButton(icon("refresh", C["on_accent"]), " Compare", objectName="Primary")
         self.compare_btn.clicked.connect(self.run_compare)
         ex.addWidget(self.compare_btn)
         lay.addLayout(ex)
@@ -117,7 +117,7 @@ class SyncDialog(QDialog):
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
         bottom.addWidget(close)
-        self.apply_btn = QPushButton(icon("play", "#0b0d12"), " Apply", objectName="Primary")
+        self.apply_btn = QPushButton(icon("play", C["on_accent"]), " Apply", objectName="Primary")
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self.apply)
         bottom.addWidget(self.apply_btn)

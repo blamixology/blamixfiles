@@ -83,7 +83,7 @@ class QueueView(QWidget):
         bn.setContentsMargins(12, 6, 12, 6)
         self.banner_text = QLabel("")
         bn.addWidget(self.banner_text, 1)
-        resume = QPushButton(icon("play", "#0b0d12"), " Resume", objectName="Primary")
+        resume = QPushButton(icon("play", C["on_accent"]), " Resume", objectName="Primary")
         resume.clicked.connect(self._resume_restored)
         discard = QPushButton("Discard")
         discard.clicked.connect(self._discard_restored)

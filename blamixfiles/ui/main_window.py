@@ -7,18 +7,19 @@ import time
 import webbrowser
 
 from PySide6.QtCore import QByteArray, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from .. import __version__
+from .. import __version__, keychain
 from ..core import engine as E
 from ..core.queue_store import QueueStore
 from ..core.vfs import Entry
 from ..models import Site, Store
 from ..paths import data_dir
 from ..settings import Settings
+from ..vault import Vault, WrongPassword
 from .bridge import ask_on_ui, on_ui
 from .dialogs import OverwriteDialog, SiteDialog
 from .editor import EditorTab
@@ -227,6 +228,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.settings = settings
+        self.keychain_account = ""          # set by main(); empty in tests
         self.setWindowTitle("BlamixFiles")
         self.resize(1320, 820)
         from .palette import Bookmarks
@@ -366,7 +368,7 @@ class MainWindow(QMainWindow):
         sub.setObjectName("Muted")
         lay.addWidget(sub)
         row = QHBoxLayout()
-        b1 = QPushButton(icon("plus", "#0b0d12"), " New site", objectName="Primary")
+        b1 = QPushButton(icon("plus", C["on_accent"]), " New site", objectName="Primary")
         b1.clicked.connect(self.new_site)
         b2 = QPushButton(icon("import"), " Import sites")
         im = QMenu(b2)
@@ -400,6 +402,12 @@ class MainWindow(QMainWindow):
         act(f, "Import from WinSCP…", self.import_winscp, None, "import")
         act(f, "Import from BlamixShell…", self.import_blamixshell, None, "import")
         f.addSeparator()
+        if keychain.available():
+            self.keychain_act = act(f, f"Unlock with {keychain.backend_name()}", self.toggle_keychain)
+            self.keychain_act.setCheckable(True)
+            self.keychain_act.setToolTip("Remember the master password in the OS secure store")
+            f.aboutToShow.connect(lambda: self.keychain_act.setChecked(self._keychain_saved()))
+            f.addSeparator()
         act(f, "Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         act(f, "Quit", self.close, "Ctrl+Q")
         self.sync_menu = mb.addMenu("&Sync")
@@ -407,6 +415,14 @@ class MainWindow(QMainWindow):
         v = mb.addMenu("&View")
         act(v, "Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "Ctrl+J")
         act(v, "Show/hide folder trees", self.toggle_trees, "Ctrl+T")
+        tm = v.addMenu("Theme")
+        grp = QActionGroup(self)
+        for key, label in (("system", "Follow the system"), ("dark", "Dark"), ("light", "Light")):
+            a = tm.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(self.settings["theme"] == key)
+            a.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+            grp.addAction(a)
         h = mb.addMenu("&Help")
         act(h, "BlamixFiles on GitHub", lambda: webbrowser.open(GITHUB), None, "github")
         act(h, "Report a problem", lambda: webbrowser.open(GITHUB + "/issues"), None, "help")
@@ -414,6 +430,35 @@ class MainWindow(QMainWindow):
         act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    def set_theme(self, name: str) -> None:
+        self.settings["theme"] = name
+        self.settings.save()
+        QMessageBox.information(self, "Theme", "The theme changes the next time you start BlamixFiles.")
+
+    # ---- unlock with the OS keychain
+    def _keychain_saved(self) -> bool:
+        return bool(self.keychain_account and keychain.load(self.keychain_account))
+
+    def toggle_keychain(self) -> None:
+        name = keychain.backend_name()
+        if not self.keychain_account or self._keychain_saved():
+            keychain.delete(self.keychain_account)
+            return
+        pw, ok = QInputDialog.getText(self, "Unlock automatically", f"Master password to store in {name}:",
+                                      QLineEdit.Password)
+        if not ok:
+            return
+        try:
+            Vault.open(self.store.vault.path, pw)
+        except WrongPassword:
+            QMessageBox.warning(self, "Unlock automatically", "Wrong master password.")
+            return
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "Unlock automatically", str(e))
+            return
+        if not keychain.save(self.keychain_account, pw):
+            QMessageBox.warning(self, "Unlock automatically", f"Couldn't store the password in {name}.")
 
     def show_palette(self) -> None:
         from .palette import CommandPalette

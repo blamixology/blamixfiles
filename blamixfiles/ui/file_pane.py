@@ -522,6 +522,13 @@ class FilePane(QWidget):
         if err:
             self.message.emit(err, True)
 
+    # TODO(BlamixShell): uncomment when BlamixShell supports opening a site from its command line.
+    # def open_in_blamixshell(self, path: str = "") -> None:
+    #     from .terminal import open_in_blamixshell
+    #     err = open_in_blamixshell(self.session.site, path or self.path)
+    #     if err:
+    #         self.message.emit(err, True)
+
     def _menu(self, pos) -> None:
         sel = self.selected()
         m = QMenu(self)
@@ -557,4 +564,7 @@ class FilePane(QWidget):
             m.addSeparator()
             target = sel[0].path if len(sel) == 1 and sel[0].is_dir else self.path
             m.addAction(icon("terminal"), "Open SSH terminal here", lambda: self.open_terminal(target))
+            # TODO(BlamixShell): enable together with open_in_blamixshell() in terminal.py
+            # once BlamixShell accepts a site on its command line.
+            # m.addAction(icon("terminal"), "Open in BlamixShell", lambda: self.open_in_blamixshell(target))
         m.exec(self.tree.viewport().mapToGlobal(pos))

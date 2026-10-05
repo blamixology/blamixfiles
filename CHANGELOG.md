@@ -11,3 +11,5 @@ Watch a local folder and upload every change (app and `blamixfiles watch`); big 
 uploads resume after a crash or restart; About dialog with "made by Blamixology".
 Import from WinSCP and BlamixShell; FTP server time zone correction; edit files in another app
 (VS Code, Notepad++, …) with upload on save.
+Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service;
+the CLI uses it too); light theme and "follow the system" (View → Theme).

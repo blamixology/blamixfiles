@@ -25,7 +25,7 @@ import time
 
 import paramiko
 
-from . import __version__
+from . import __version__, keychain
 from .core import engine as E
 from .core import ssh
 from .core.backends import open_backend
@@ -44,7 +44,16 @@ def _store() -> Store:
     path = vault_path()
     if not Vault.exists(path):
         raise UsageError("No vault yet: open the BlamixFiles app once to create it, or use a URL.")
-    pw = os.environ.get("BLAMIXFILES_VAULT_PASSWORD") or getpass.getpass("Master password: ")
+    pw = os.environ.get("BLAMIXFILES_VAULT_PASSWORD")
+    if not pw:
+        pw = keychain.load(keychain.account_for(path))     # remembered by the app, if enabled
+        if pw:
+            try:
+                v, data = Vault.open(path, pw)
+                return Store(v, data)
+            except WrongPassword:
+                pass                                        # stale: ask instead
+        pw = getpass.getpass("Master password: ")
     try:
         v, data = Vault.open(path, pw)
     except WrongPassword:

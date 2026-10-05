@@ -9,7 +9,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-C = {
+DARK = {
     "bg": "#0b0d12",
     "sidebar": "#10131a",
     "surface": "#151923",
@@ -24,11 +24,78 @@ C = {
     "ok": "#3ddc97",
     "warn": "#ffc857",
     "danger": "#ff5d73",
+    # derived tokens
+    "on_accent": "#0b0d12",       # text/icons on a filled accent button
+    "accent_hover": "#95a2ff",
+    "selected": "#2a3354",        # selected row in an active list
+    "banner": "#1d2440",
+    "code_sel": "#2c3a5c",
+    "line_hl": "#141925",         # current line in the editor
+    "overlay": "rgba(11,13,18,215)",
 }
+
+LIGHT = {
+    "bg": "#f6f7fb",
+    "sidebar": "#eceef5",
+    "surface": "#ffffff",
+    "surface2": "#f0f2f8",
+    "hover": "#e4e8f3",
+    "border": "#d8dce8",
+    "text": "#1b2030",
+    "muted": "#5b6378",
+    "faint": "#8a92a8",
+    "accent": "#4f5fe0",
+    "accent2": "#7c4dff",
+    "ok": "#12935d",
+    "warn": "#b7791f",
+    "danger": "#d6334c",
+    "on_accent": "#ffffff",
+    "accent_hover": "#6573ea",
+    "selected": "#d5dcfb",
+    "banner": "#e4e8fd",
+    "code_sel": "#cbd5f7",
+    "line_hl": "#eef1fa",
+    "overlay": "rgba(246,247,251,225)",
+}
+
+THEMES = ("system", "dark", "light")
+
+# One shared dict: modules do `from .theme import C`, so set_theme() updates it in place.
+# It has to run before any widget (or module-level color table) is built.
+C = dict(DARK)
+_current = "dark"
+
+
+def system_is_dark(app=None) -> bool:
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        app = app or QApplication.instance()
+        return app.styleHints().colorScheme() != Qt.ColorScheme.Light
+    except Exception:
+        return True
+
+
+def set_theme(name: str, app=None) -> str:
+    """Select 'system' / 'dark' / 'light'; returns the resolved 'dark' or 'light'."""
+    global _current
+    if name not in THEMES:
+        name = "system"
+    resolved = ("dark" if system_is_dark(app) else "light") if name == "system" else name
+    C.clear()
+    C.update(DARK if resolved == "dark" else LIGHT)
+    _current = resolved
+    return resolved
+
+
+def is_dark() -> bool:
+    return _current == "dark"
+
 
 UI_FONT = "Segoe UI Variable Text"
 
-QSS = f"""
+def build_qss() -> str:
+    return f"""
 * {{ font-family: "{UI_FONT}", "Segoe UI", "Inter", sans-serif; font-size: 10pt; color: {C['text']}; }}
 QMainWindow, QDialog {{ background: {C['bg']}; }}
 QToolTip {{ background: {C['surface2']}; color: {C['text']}; border: 1px solid {C['border']};
@@ -62,8 +129,8 @@ QPushButton {{ background: {C['surface2']}; border: 1px solid {C['border']}; bor
 QPushButton:hover {{ background: {C['hover']}; }}
 QPushButton:pressed {{ background: {C['surface']}; }}
 QPushButton:disabled {{ color: {C['faint']}; }}
-QPushButton#Primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: #0b0d12; font-weight: 600; }}
-QPushButton#Primary:hover {{ background: #95a2ff; }}
+QPushButton#Primary {{ background: {C['accent']}; border: 1px solid {C['accent']}; color: {C['on_accent']}; font-weight: 600; }}
+QPushButton#Primary:hover {{ background: {C['accent_hover']}; }}
 QPushButton#Danger {{ background: transparent; border: 1px solid {C['danger']}; color: {C['danger']}; }}
 QPushButton#Ghost, QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px; }}
 QPushButton#Ghost:hover, QToolButton:hover {{ background: {C['hover']}; }}
@@ -73,16 +140,16 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 QTreeWidget, QListWidget, QTableWidget {{ background: transparent; border: none; outline: none; }}
 QTreeWidget#Files::item {{ border-radius: 0; padding: 3px 2px; }}
 QTreeWidget#Files::item:selected {{ background: {C['hover']}; }}
-QTreeWidget#Files::item:selected:active {{ background: #2a3354; }}
+QTreeWidget#Files::item:selected:active {{ background: {C['selected']}; }}
 QTreeWidget#Files {{ background: transparent; }}
 QTreeWidget#Folders {{ background: {C['sidebar']}; border-bottom: 1px solid {C['border']}; show-decoration-selected: 0; }}
 QTreeWidget#Folders::item {{ padding: 2px; border-radius: 6px; }}
-QTreeWidget#Folders::item:selected {{ background: #2a3354; color: {C['text']}; }}
+QTreeWidget#Folders::item:selected {{ background: {C['selected']}; color: {C['text']}; }}
 QTreeWidget#Folders::branch:selected, QTreeWidget#Folders::branch:hover {{ background: transparent; }}
-QPlainTextEdit#Code {{ background: {C['bg']}; border: none; border-radius: 0; padding: 0; selection-background-color: #2c3a5c; }}
+QPlainTextEdit#Code {{ background: {C['bg']}; border: none; border-radius: 0; padding: 0; selection-background-color: {C['code_sel']}; }}
 #FindBar {{ background: {C['surface']}; border-top: 1px solid {C['border']}; }}
 #Prod {{ color: {C['danger']}; font-weight: 600; }}
-#Banner {{ background: #1d2440; border-bottom: 1px solid {C['accent']}; }}
+#Banner {{ background: {C['banner']}; border-bottom: 1px solid {C['accent']}; }}
 QTreeWidget::item, QListWidget::item {{ border-radius: 8px; padding: 2px; }}
 QTreeWidget::item:hover, QListWidget::item:hover {{ background: {C['hover']}; }}
 QTreeWidget::item:selected, QListWidget::item:selected {{ background: {C['surface2']}; color: {C['text']}; }}
@@ -154,7 +221,7 @@ QRadioButton::indicator:checked {{ border: 1px solid {C['accent']};
 #Palette QListWidget::item {{ padding: 8px 10px; }}
 #PaneHeader {{ background: {C['surface']}; border-bottom: 1px solid {C['border']}; }}
 #PaneHeader[active="true"] {{ border-bottom: 1px solid {C['accent']}; }}
-#Overlay {{ background: rgba(11,13,18,215); }}
+#Overlay {{ background: {C['overlay']}; }}
 #Toolbar {{ background: {C['surface']}; border-bottom: 1px solid {C['border']}; }}
 #Muted {{ color: {C['muted']}; }}
 #Hint {{ color: {C['faint']}; font-size: 8.5pt; }}
@@ -271,7 +338,7 @@ def apply_palette(app) -> None:
     pal.setColor(QPalette.Button, QColor(C["surface2"]))
     pal.setColor(QPalette.ButtonText, QColor(C["text"]))
     pal.setColor(QPalette.Highlight, QColor(C["accent"]))
-    pal.setColor(QPalette.HighlightedText, QColor("#0b0d12"))
+    pal.setColor(QPalette.HighlightedText, QColor(C["on_accent"]))
     pal.setColor(QPalette.PlaceholderText, QColor(C["faint"]))
     pal.setColor(QPalette.ToolTipBase, QColor(C["surface2"]))
     pal.setColor(QPalette.ToolTipText, QColor(C["text"]))
@@ -279,7 +346,7 @@ def apply_palette(app) -> None:
     from ..paths import assets_dir
     from .platform_ui import FONT_SCALE, pick_ui_font
     fam = pick_ui_font()
-    qss = QSS.replace("__ASSETS__", assets_dir().as_posix()).replace(UI_FONT, fam)
+    qss = build_qss().replace("__ASSETS__", assets_dir().as_posix()).replace(UI_FONT, fam)
     if FONT_SCALE != 1.0:
         qss = re.sub(r"(\d+(?:\.\d+)?)pt", lambda m: f"{float(m.group(1)) * FONT_SCALE:.1f}pt", qss)
     app.setStyleSheet(qss)
@@ -295,7 +362,7 @@ def style_window(widget) -> None:
 
         hwnd = wintypes.HWND(int(widget.winId()))
         dwm = ctypes.windll.dwmapi
-        on = ctypes.c_int(1)
+        on = ctypes.c_int(1 if is_dark() else 0)
         dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))   # dark mode
         col = QColor(C["sidebar"])
         colorref = ctypes.c_int(col.red() | (col.green() << 8) | (col.blue() << 16))

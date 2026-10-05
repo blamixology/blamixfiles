@@ -20,17 +20,23 @@ def main() -> None:
     app.setApplicationName("BlamixFiles")
     app.setOrganizationName("BlamixFiles")
 
+    from . import keychain
     from .models import Store
     from .paths import assets_dir, vault_path
     from .settings import Settings
+    from .ui import theme
+    from .vault import Vault, VaultError, WrongPassword
+
+    # the theme must be chosen before any widget module is imported (they read its colors)
+    settings = Settings()
+    theme.set_theme(os.environ.get("BLAMIXFILES_THEME") or settings["theme"], app)
+
     from .ui.bridge import init_bridge
     from .ui.dialogs import UnlockDialog
     from .ui.main_window import MainWindow
-    from .ui.theme import apply_palette
-    from .vault import Vault, VaultError, WrongPassword
 
     init_bridge()
-    apply_palette(app)
+    theme.apply_palette(app)
     ico = assets_dir() / ("app.ico" if sys.platform == "win32" else "app.png")
     if ico.exists():
         app.setWindowIcon(QIcon(str(ico)))
@@ -41,6 +47,7 @@ def main() -> None:
 
     path = vault_path()
     create = not Vault.exists(path)
+    account = keychain.account_for(path)
     holder: dict = {}
 
     def attempt(pw: str) -> str:
@@ -50,6 +57,7 @@ def main() -> None:
             else:
                 v, data = Vault.open(path, pw)
                 holder["store"] = Store(v, data)
+            holder["pw"] = pw
             return ""
         except WrongPassword:
             return "Wrong master password."
@@ -58,10 +66,24 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001 (corrupted file etc.)
             return f"Could not open the vault: {e}"
 
-    dlg = UnlockDialog(create, attempt)
-    if dlg.exec() != QDialog.Accepted:
-        sys.exit(0)
-    win = MainWindow(holder["store"], Settings())
+    # silent unlock with the password remembered in the OS keychain
+    if not create and keychain.available() and not os.environ.get("BLAMIXFILES_NO_KEYCHAIN"):
+        saved = keychain.load(account)
+        if saved and attempt(saved):
+            keychain.delete(account)        # stale (password changed): ask again
+            holder.pop("store", None)
+
+    if "store" not in holder:
+        dlg = UnlockDialog(create, attempt, remember=keychain.backend_name())
+        if dlg.exec() != QDialog.Accepted:
+            sys.exit(0)
+        if keychain.available():
+            if dlg.remember_checked():
+                keychain.save(account, holder["pw"])
+            else:
+                keychain.delete(account)
+    win = MainWindow(holder["store"], settings)
+    win.keychain_account = account
     win.show()
     win.restore_tabs()
     _clean_drag_cache()

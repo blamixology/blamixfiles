@@ -60,3 +60,37 @@ def open_terminal(site, path: str, resolve) -> str:
     except OSError as e:
         return str(e)
     return ""
+
+
+# TODO(BlamixShell): uncomment (and adjust the flags) once BlamixShell accepts a site on its
+# command line. Proposed contract, matching the vault entry BlamixFiles imports:
+#     blamixshell --site "<site label or id>" [--cd "<remote folder>"]
+# BlamixShell resolves the site from its own vault, so no credentials pass through here.
+#
+# def blamixshell_executable() -> str | None:
+#     """BlamixShell on PATH, or in its usual per-OS install location."""
+#     exe = shutil.which("blamixshell")
+#     if exe:
+#         return exe
+#     candidates = []
+#     if sys.platform == "win32":
+#         base = os.environ.get("LOCALAPPDATA", "")
+#         candidates = [os.path.join(base, "Programs", "BlamixShell", "BlamixShell.exe")]
+#     elif sys.platform == "darwin":
+#         candidates = ["/Applications/BlamixShell.app/Contents/MacOS/BlamixShell"]
+#     return next((c for c in candidates if os.path.isfile(c)), None)
+#
+#
+# def open_in_blamixshell(site, path: str = "") -> str:
+#     """Start BlamixShell on this site. Returns '' or an error message."""
+#     exe = blamixshell_executable()
+#     if exe is None:
+#         return "BlamixShell isn't installed (or not on your PATH)."
+#     cmd = [exe, "--site", site.label]
+#     if path:
+#         cmd += ["--cd", path]
+#     try:
+#         subprocess.Popen(cmd)
+#     except OSError as e:
+#         return str(e)
+#     return ""

@@ -24,8 +24,9 @@ class _Base(QDialog):
 
 # ======================================================================= unlock
 class UnlockDialog(_Base):
-    def __init__(self, create: bool, attempt, parent=None):
-        """attempt(password) -> str error or '' on success."""
+    def __init__(self, create: bool, attempt, parent=None, remember: str = ""):
+        """attempt(password) -> str error or '' on success.
+        remember: name of the OS keychain to offer ("" = no such option)."""
         super().__init__(parent)
         self.create = create
         self._attempt = attempt
@@ -55,6 +56,11 @@ class UnlockDialog(_Base):
         self.pw2 = QLineEdit(echoMode=QLineEdit.Password, placeholderText="Confirm password")
         self.pw2.setVisible(create)
         lay.addWidget(self.pw2)
+        self.remember = QCheckBox(f"Unlock automatically with {remember}") if remember else None
+        if self.remember:
+            self.remember.setToolTip("Stores the master password in your OS account's secure store. "
+                                     "Anyone signed in to this account can then open the vault.")
+            lay.addWidget(self.remember)
         self.err = QLabel()
         self.err.setStyleSheet(f"color:{C['danger']};")
         self.err.setWordWrap(True)
@@ -88,6 +94,9 @@ class UnlockDialog(_Base):
             self.pw.setFocus()
         else:
             self.accept()
+
+    def remember_checked(self) -> bool:
+        return bool(self.remember and self.remember.isChecked())
 
     def _fail(self, msg: str) -> None:
         self.err.setText(msg)
@@ -657,7 +666,7 @@ class AboutDialog(_Base):
         bl.setSpacing(10)
         bl.addWidget(QLabel("If BlamixFiles saves you time, you can buy me a coffee. Thanks!", wordWrap=True))
         row = QHBoxLayout()
-        coffee = QPushButton(icon("coffee", "#0b0d12"), " Buy me a coffee", objectName="Primary")
+        coffee = QPushButton(icon("coffee", C["on_accent"]), " Buy me a coffee", objectName="Primary")
         coffee.clicked.connect(lambda: open_url(links.KOFI_URL))
         sponsor = QPushButton(icon("heart", C["muted"]), " Sponsor on GitHub")
         sponsor.clicked.connect(lambda: open_url(links.SPONSOR_URL))
