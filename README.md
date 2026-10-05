@@ -1,5 +1,13 @@
 # BlamixFiles
 
+[![tests](https://github.com/blamixology/blamixfiles/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/blamixology/blamixfiles/actions/workflows/tests.yml)
+[![build](https://github.com/blamixology/blamixfiles/actions/workflows/release.yml/badge.svg)](https://github.com/blamixology/blamixfiles/actions/workflows/release.yml)
+[![release](https://img.shields.io/github/v/release/blamixology/blamixfiles)](https://github.com/blamixology/blamixfiles/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/blamixology/blamixfiles/total)](https://github.com/blamixology/blamixfiles/releases)
+[![license](https://img.shields.io/github/license/blamixology/blamixfiles)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/blamixology/blamixfiles/releases/latest)
+
 A free, open-source file transfer client: a modern FileZilla alternative.
 SFTP, SCP, FTP/FTPS, WebDAV and S3 in one portable app, a **built-in editor** that saves straight to
 the server, and an **encrypted password vault**. Windows, macOS and Linux, plus a CLI.
