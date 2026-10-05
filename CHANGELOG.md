@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-10-06
+
+- TUI: keep the cursor on refresh (fixes flaky copy test); updater script: escape the exe path (18a7222)
+
 ## 0.6.0 - 2026-10-06
 
 - Folder tree and server list: one-piece selection/hover highlight (no seam, no accent block) (77854d4)
