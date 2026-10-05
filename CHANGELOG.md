@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-05
+
 First release: SFTP, SCP, FTP/FTPS, WebDAV and S3 client with a dual-pane browser, a transfer queue that
 survives restarts (with speed limits), a built-in editor that saves straight to the server,
 compare & sync with a preview of every change, an encrypted vault, FileZilla import and a CLI.
@@ -13,3 +15,17 @@ Import from WinSCP and BlamixShell; FTP server time zone correction; edit files 
 (VS Code, Notepad++, …) with upload on save.
 Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service;
 the CLI uses it too); light theme and "follow the system" (View → Theme).
+
+- dev.sh release: force UTF-8 so commit subjects with arrows don't crash on Windows (9cecdfa)
+- Unlock vault with OS keychain; light and system theme; Open in BlamixShell prepared (commented out) (06ecce5)
+- Import from WinSCP and BlamixShell; FTP server time zone; edit in another app (ff46754)
+- Watch folder & upload changes; resumable S3 multipart and Nextcloud chunked uploads (059e729)
+- About: made by Blamixology (logo + link); CI: Node 24 actions, MSI and portable apps as separate downloads (ed8e1d7)
+- Jump hosts, folder trees, drag to desktop, tab restore, checksums, MSI, bookmarks, Ctrl+K (18230d0)
+- SCP, WebDAV and S3 support; clearer selftest (1d7d1b9)
+- SCP, WebDAV and S3 support (fc8b544)
+- Compare & sync with preview, sync profiles, blamixfiles sync (6e4f731)
+- Saved transfer queue, speed limits, release builds for Windows/macOS/Linux (22e6112)
+- BlamixFiles 0.1 dev: SFTP/FTP/FTPS client, queue, editor, vault, CLI, dev.sh (650f015)
+- BlamixFiles 0.1 dev: SFTP/FTP/FTPS client, queue, editor, vault, CLI, dev.sh (6df8140)
+
