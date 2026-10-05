@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-06
+
+- Terminal UI: blamixfiles tui (browse, copy, rename, delete over SSH) (fb06ab1)
+- README: badges (tests, build, release, downloads, license, python, platforms) (92e89fe)
+
 ## 0.3.0 - 2026-10-05
 
 - Updates: daily check, one-click install (MSI/portable), install from file (b6160b3)
