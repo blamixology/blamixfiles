@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-06
+
+- Folder tree and server list: one-piece selection/hover highlight (no seam, no accent block) (77854d4)
+- Tabs: draw the tab icon ourselves so icon, label and close button share one line (7fb34a4)
+
 ## 0.5.0 - 2026-10-06
 
 - Live theme switching (no restart), follow the OS light/dark setting while running (f12eb9f)
