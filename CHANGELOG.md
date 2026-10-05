@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-10-05
+
+- Updates: daily check, one-click install (MSI/portable), install from file (b6160b3)
+
 ## 0.2.0 - 2026-10-05
 
 - Six themes; hide the server list (Ctrl+B); own tab close button (12d0bd6)
