@@ -89,8 +89,22 @@ blamixfiles import winscp                                       # WinSCP.ini or 
 blamixfiles import blamixshell                                  # asks for the BlamixShell master password
 ```
 
-Saved sites come from the vault (`BLAMIXFILES_VAULT_PASSWORD` or a prompt).
+Saved sites come from the vault (`BLAMIXFILES_VAULT_PASSWORD`, the OS keychain if you enabled it in the app, or a prompt).
 Exit codes: `0` ok, `1` some transfers failed, `2` connection/login problem, `3` usage error.
+
+## Terminal UI
+
+For servers with no desktop (works over SSH): `pip install "blamixfiles[tui]"`, then
+
+```
+blamixfiles tui
+```
+
+Unlock the vault, pick a site (`/` filters, `u` opens an address), then browse this computer on the left and
+the server on the right. `Tab` switches pane, `Space` marks files, `F5`/`c` copies to the other pane (with the
+same queue as the app: parallel, resume, "file exists" questions), `F7`/`m` new folder, `F2`/`r` rename,
+`Del`/`d` delete, `h` hidden files, `x` cancel transfers, `t` retry failed, `Esc` back to the sites.
+Sites are added and edited in the app.
 
 ## Development
 

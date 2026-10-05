@@ -46,4 +46,4 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | | Feature |
 |---|---|
 | 💡 | Google Drive, Dropbox, OneDrive |
-| 💡 | Terminal UI (like BlamixShell's) |
+| ✅ | Terminal UI: `blamixfiles tui` (browse, copy, rename, delete over SSH) |

@@ -124,6 +124,15 @@ def connect(site: Site):
     raise UsageError("Could not connect")
 
 
+def cmd_tui(a) -> int:
+    try:
+        from .tui import BlamixFilesTUI
+    except ImportError:
+        raise UsageError("The terminal UI needs Textual: pip install \"blamixfiles[tui]\"") from None
+    BlamixFilesTUI().run()
+    return 0
+
+
 def cmd_sites(a) -> int:
     rows = sorted(store().sites.values(), key=lambda s: (s.group, s.label.lower()))
     if a.json:
@@ -380,6 +389,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="blamixfiles", description="BlamixFiles command line")
     ap.add_argument("--version", action="version", version=f"BlamixFiles {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("tui", help="full-screen terminal UI (browse, copy, rename, delete)")
+    p.set_defaults(fn=cmd_tui)
     p = sub.add_parser("sites", help="list saved sites")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_sites)

@@ -40,3 +40,4 @@ the CLI uses it too); six themes like BlamixShell plus "follow the system" (View
 Updates: a quiet daily check on GitHub Releases, one-click install for the MSI and portable Windows builds, and
 "Install update from file…" (with SHA-256 check) for computers without internet; admins can switch the check off
 (`BLAMIXFILES_UPDATE_CHECK=off` or `policy.ini`).
+Terminal UI (`blamixfiles tui`): browse and copy between this computer and a server from any terminal, even over SSH.
