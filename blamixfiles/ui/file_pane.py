@@ -6,7 +6,7 @@ import json
 import os
 
 from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
-from PySide6.QtGui import QDrag, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QSplitter,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -31,7 +31,7 @@ class _Item(QTreeWidgetItem):
         if e.is_link:
             self.setToolTip(0, f"{e.name} → {e.link_target}")
         if e.name.startswith("."):
-            self.setForeground(0, self.foreground(0).color().darker(135))
+            self.setForeground(0, QColor(C["muted"]))   # dotfiles: dimmed (an unset brush reads as black)
 
     def __lt__(self, other: "_Item") -> bool:  # folders first, then by column
         tw = self.treeWidget()
