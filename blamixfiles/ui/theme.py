@@ -162,9 +162,13 @@ QTreeWidget#Files::item:selected {{ background: {C['hover']}; }}
 QTreeWidget#Files::item:selected:active {{ background: {C['selected']}; }}
 QTreeWidget#Files {{ background: transparent; }}
 QTreeWidget#Folders {{ background: {C['sidebar']}; border-bottom: 1px solid {C['border']}; show-decoration-selected: 0; }}
-QTreeWidget#Folders::item {{ padding: 2px; border-radius: 6px; }}
-QTreeWidget#Folders::item:selected {{ background: {C['selected']}; color: {C['text']}; }}
-QTreeWidget#Folders::branch:selected, QTreeWidget#Folders::branch:hover {{ background: transparent; }}
+/* folder tree: the whole row (arrow area included) is painted by FolderTree.drawRow as ONE piece;
+   keep Qt from painting its own, separate blocks for the item and the branch */
+QTreeWidget#Folders::item, QTreeWidget#Folders::item:selected, QTreeWidget#Folders::item:hover,
+QTreeWidget#Folders::item:selected:active, QTreeWidget#Folders::item:selected:!active {{
+  padding: 2px; background: transparent; border: none; color: {C['text']}; }}
+QTreeWidget#Folders::branch, QTreeWidget#Folders::branch:selected, QTreeWidget#Folders::branch:hover {{
+  background: transparent; border: none; }}
 QPlainTextEdit#Code {{ background: {C['bg']}; border: none; border-radius: 0; padding: 0; selection-background-color: {C['code_sel']}; }}
 #FindBar {{ background: {C['surface']}; border-top: 1px solid {C['border']}; }}
 #Prod {{ color: {C['danger']}; font-weight: 600; }}
@@ -411,6 +415,10 @@ def retheme(old: dict[str, str]) -> None:
                 new = recolor(text)
                 if new != text:
                     w.setText(new)
+        if hasattr(w, "set_qicon"):                 # an icon we draw ourselves (tab icons)
+            ico = remake(w.qicon)
+            if ico is not None:
+                w.set_qicon(ico)
         if isinstance(w, QAbstractButton):
             ico = remake(w.icon())
             if ico is not None:

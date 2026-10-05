@@ -7,7 +7,7 @@ import time
 import webbrowser
 
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -224,8 +224,54 @@ class SiteTab(QWidget):
         self.remote_session.close()
 
 
+class TabIcon(QLabel):
+    """A tab's icon, drawn by us (see _Tabs). Keeps its QIcon so a theme change can redraw it."""
+
+    def __init__(self, ico: QIcon):
+        super().__init__()
+        self.set_qicon(ico)
+
+    def set_qicon(self, ico: QIcon) -> None:
+        self.qicon = ico
+        self.setPixmap(ico.pixmap(16, 16))
+
+
 class _Tabs(QTabWidget):
-    """Tabs with a close button we draw ourselves: the native one can't be centered or themed reliably."""
+    """Tabs whose icon and close button we place ourselves. The style-sheet tab keeps 6 px of margin
+    above the label, and Qt centers its own icon/close button on the whole tab, so both land a few
+    pixels above the text; each sits in a small holder that parks it on the label's line."""
+
+    OFFSET = 3          # px the icon / button is pushed down from the middle of the tab
+
+    def _holder(self, child, size: int, left: int = 0) -> QWidget:
+        holder = QWidget()
+        holder.setFixedSize(size + 4 + left, 24)
+        child.setParent(holder)
+        child.move(left, 12 + self.OFFSET - child.height() // 2)
+        return holder
+
+    def addTab(self, widget, *args):  # noqa: N802
+        if len(args) == 2:                          # (widget, icon, label)
+            ico, label = args
+            index = super().addTab(widget, label)
+            self.setTabIcon(index, ico)
+            return index
+        return super().addTab(widget, *args)
+
+    def setTabIcon(self, index: int, ico) -> None:  # noqa: N802
+        bar = self.tabBar()
+        old = bar.tabButton(index, QTabBar.LeftSide)
+        if old is not None and getattr(old, "icon_label", None) is not None and not ico.isNull():
+            old.icon_label.set_qicon(ico)
+            return
+        if ico.isNull():
+            bar.setTabButton(index, QTabBar.LeftSide, None)
+            return
+        label = TabIcon(ico)
+        label.setFixedSize(16, 16)
+        holder = self._holder(label, 16, left=8)
+        holder.icon_label = label
+        bar.setTabButton(index, QTabBar.LeftSide, holder)
 
     def tabInserted(self, index: int) -> None:  # noqa: N802
         super().tabInserted(index)
@@ -235,12 +281,7 @@ class _Tabs(QTabWidget):
         btn.setFixedSize(20, 20)
         btn.setCursor(Qt.ArrowCursor)
         btn.clicked.connect(lambda _=False, b=btn: self._close_for(b))
-        # the tab style has 6 px of margin above the label, so the bar centers the button a little
-        # too high: park it low inside a small holder (which stays shorter than the tab itself)
-        holder = QWidget()
-        holder.setFixedSize(20, 24)
-        btn.setParent(holder)
-        btn.move(0, 6)
+        holder = self._holder(btn, 20)
         holder.btn = btn
         self.tabBar().setTabButton(index, QTabBar.RightSide, holder)
 
