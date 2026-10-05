@@ -1,7 +1,9 @@
 """Per-OS details for the desktop UI (fonts, shortcut labels)."""
 from __future__ import annotations
 
+import subprocess
 import sys
+from pathlib import Path
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -33,3 +35,27 @@ def kb(text: str) -> str:
     if IS_MAC:
         return text.replace("Ctrl+Shift+", "⌘").replace("Ctrl+", "⌘")
     return text
+
+
+def can_make_desktop_shortcut() -> bool:
+    return IS_WIN and bool(getattr(sys, "frozen", False))
+
+
+def create_desktop_shortcut() -> str:
+    """A BlamixFiles icon on the Desktop (wherever Windows keeps it, OneDrive or another drive
+    included). The installer doesn't do this: see the comment in BlamixFiles.wxs. '' or an error."""
+    if not can_make_desktop_shortcut():
+        return "Only the installed Windows app can do this."
+    exe = Path(sys.executable).resolve()
+    q = lambda p: str(p).replace("'", "''")  # noqa: E731
+    ps = ("$d = [Environment]::GetFolderPath('Desktop'); "
+          "$s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'BlamixFiles.lnk')); "
+          f"$s.TargetPath = '{q(exe)}'; $s.WorkingDirectory = '{q(exe.parent)}'; "
+          f"$s.IconLocation = '{q(exe)},0'; $s.Save()")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                           capture_output=True, text=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return "" if r.returncode == 0 else (r.stderr.strip() or "Could not create the shortcut.")

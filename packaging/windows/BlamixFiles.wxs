@@ -96,12 +96,9 @@
       </Component>
     </Feature>
 
-    <Feature Id="DesktopShortcut" Title="Desktop shortcut" Description="Add a BlamixFiles icon to the desktop." Level="1">
-      <Component Id="DesktopShortcutComp" Directory="DesktopFolder" Guid="589bc558-fc43-465b-b666-ab1808fc9a33">
-        <Shortcut Id="DesktopSc" Name="BlamixFiles" Target="[APPLICATIONFOLDER]BlamixFiles.exe"
-                  WorkingDirectory="APPLICATIONFOLDER" Icon="AppIcon" />
-        <RegistryValue Root="HKMU" Key="Software\BlamixFiles" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
-      </Component>
-    </Feature>
+    <!-- No desktop shortcut here on purpose: with the Desktop folder redirected to another drive
+         (OneDrive, "E:\Desktop"), Windows Installer also writes its rollback files on that drive
+         and fails with error 1307/1926 for per-user installs. The app creates the shortcut itself
+         (File > Create desktop shortcut). -->
   </Package>
 </Wix>

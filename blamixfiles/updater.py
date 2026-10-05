@@ -310,17 +310,27 @@ def msi_scope_args(app_dir: Path) -> str:
 
 def msi_update_script(msi: Path, app_dir: Path, pid: int) -> str:
     log = Path(tempfile.gettempdir()) / "blamixfiles-update-msi.log"
-    # the MSI upgrade replaces the files in the same folder
-    candidates = [app_dir / "BlamixFiles.exe"]
-    starts = " ".join(f'"{c}"' for c in candidates)
+    log2 = Path(tempfile.gettempdir()) / "blamixfiles-update-msi-retry.log"
+    scope = msi_scope_args(app_dir)
     return f"""@echo off
 setlocal
 {_wait_and_kill_helpers(pid, app_dir)}{_log("running msiexec")}
-msiexec /i "{msi}" {msi_scope_args(app_dir)} /passive /norestart /l*v "{log}"
+msiexec /i "{msi}" {scope} /passive /norestart /l*v "{log}"
 set rc=%ERRORLEVEL%
 {_log("msiexec finished with code %rc%")}
+if "%rc%"=="0" goto done
+if "%rc%"=="3010" goto done
+if not "%rc%"=="1603" goto end
+rem 1603 = the upgrade failed and was rolled back. One cause: Windows Installer can't set security on
+rem its rollback files on another drive (error 1307, e.g. a Desktop redirected to E:). The old version
+rem is back in place, so try once more without rollback files.
+{_log("retrying without rollback files")}
+msiexec /i "{msi}" {scope} DISABLEROLLBACK=1 /passive /norestart /l*v "{log2}"
+set rc=%ERRORLEVEL%
+{_log("second try finished with code %rc%")}
 if not "%rc%"=="0" if not "%rc%"=="3010" goto end
-for %%E in ({starts}) do if exist %%E ( start "" %%E & goto end )
+:done
+if exist "{app_dir}\BlamixFiles.exe" start "" "{app_dir}\BlamixFiles.exe"
 :end
 (goto) 2>nul & del "%~f0"
 """

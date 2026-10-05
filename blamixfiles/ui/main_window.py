@@ -26,7 +26,7 @@ from .editor import EditorTab
 from .file_pane import FilePane
 from .queue_view import QueueView
 from .session import Session
-from . import theme
+from . import platform_ui, theme
 from .theme import C, icon, style_window
 
 from ..links import COMPANY, COMPANY_URL, KOFI_URL as KOFI, REPO_URL as GITHUB
@@ -446,6 +446,9 @@ class MainWindow(QMainWindow):
             self.keychain_act.setToolTip("Remember the master password in the OS secure store")
             f.aboutToShow.connect(lambda: self.keychain_act.setChecked(self._keychain_saved()))
             f.addSeparator()
+        if platform_ui.can_make_desktop_shortcut():
+            act(f, "Create desktop shortcut", self.make_desktop_shortcut)
+            f.addSeparator()
         act(f, "Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
         act(f, "Quit", self.close, "Ctrl+Q")
         self.sync_menu = mb.addMenu("&Sync")
@@ -477,6 +480,13 @@ class MainWindow(QMainWindow):
         act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
+
+    def make_desktop_shortcut(self) -> None:
+        err = platform_ui.create_desktop_shortcut()
+        if err:
+            QMessageBox.warning(self, "Desktop shortcut", err)
+        else:
+            self.show_message("Desktop shortcut created")
 
     def _set_auto_updates(self, on: bool) -> None:
         self.settings["check_updates"] = bool(on)

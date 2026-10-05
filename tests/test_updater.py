@@ -103,6 +103,9 @@ def test_scripts_keep_data_and_restart(tmp_path, monkeypatch):
     assert "/XD data" in portable and "BlamixFiles.exe" in portable and "PID eq 123" in portable
     msi = U.msi_update_script(tmp_path / "x.msi", app, 123)
     assert "msiexec /i" in msi and "BlamixFiles.exe" in msi
+    # a rolled-back upgrade (1603, e.g. error 1307 on another drive) is retried once without rollback files
+    assert msi.count("msiexec /i") == 2 and "DISABLEROLLBACK=1" in msi and '"%rc%"=="1603"' in msi
+    assert msi.index("DISABLEROLLBACK=1") > msi.index('"%rc%"=="1603"')
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     assert U.msi_scope_args(tmp_path / "local" / "Programs" / "BlamixFiles") == "ALLUSERS=2 MSIINSTALLPERUSER=1"
     assert U.msi_scope_args(tmp_path / "Program Files" / "BlamixFiles") == "ALLUSERS=1"

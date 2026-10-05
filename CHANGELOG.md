@@ -46,3 +46,5 @@ Updates: a quiet daily check on GitHub Releases, one-click install for the MSI a
 "Install update from file…" (with SHA-256 check) for computers without internet; admins can switch the check off
 (`BLAMIXFILES_UPDATE_CHECK=off` or `policy.ini`).
 Terminal UI (`blamixfiles tui`): browse and copy between this computer and a server from any terminal, even over SSH.
+Installer: no desktop shortcut in the MSI any more (a Desktop folder on another drive made upgrades fail with error 1307);
+File → Create desktop shortcut does it from the app, and the in-app updater retries once without rollback files.
