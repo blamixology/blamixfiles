@@ -330,7 +330,7 @@ set rc=%ERRORLEVEL%
 {_log("second try finished with code %rc%")}
 if not "%rc%"=="0" if not "%rc%"=="3010" goto end
 :done
-if exist "{app_dir}\BlamixFiles.exe" start "" "{app_dir}\BlamixFiles.exe"
+if exist "{app_dir}\\BlamixFiles.exe" start "" "{app_dir}\\BlamixFiles.exe"
 :end
 (goto) 2>nul & del "%~f0"
 """

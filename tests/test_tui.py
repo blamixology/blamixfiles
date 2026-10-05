@@ -49,6 +49,9 @@ def test_tui_browse_copy_mkdir_delete(tmp_path):
                 await until(lambda: (srv_root / "up.txt").exists() and not scr.engine.pending())
                 assert (srv_root / "up.txt").read_text() == "from here"
 
+                # the finished upload refreshes the server pane: wait for that before moving the cursor
+                await until(lambda: "/up.txt" in scr.remote.entries)
+
                 # download: switch to the server pane, cursor on a.txt (after dir/), F5
                 await pilot.press("tab")
                 await until(lambda: scr.remote.has_focus_within)

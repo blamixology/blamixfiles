@@ -313,6 +313,9 @@ class FilePane(Vertical):
         self.app.run_worker(work, thread=True, group=f"list-{id(self)}", exclusive=True)
 
     def _fill(self, path: str, entries: list, select: str = "") -> None:
+        if not select and path == self.path:           # a refresh of the same folder keeps your place
+            cur = self.current()
+            select = cur[0] if cur and cur[0] != ".." else ""
         self.path = path
         self.marked.clear()
         self.query_one(".path", Label).update(f"{self.heading}  {path or 'This PC'}")
