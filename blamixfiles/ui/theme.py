@@ -178,9 +178,9 @@ QTreeWidget::item:hover, QListWidget::item:hover {{ background: {C['hover']}; }}
 QTreeWidget::item:selected, QListWidget::item:selected {{ background: {C['surface2']}; color: {C['text']}; }}
 #Palette QListWidget::item:selected {{ background: {C['hover']}; color: {C['text']}; }}
 QTreeView::branch {{ background: transparent; }}
-/* server list: rows are painted by the delegate; keep Qt from painting its own
-   selection/focus block in the indentation area */
-QTreeWidget#ServerTree {{ outline: 0; }}
+/* server list: rows are painted by RowTree.drawRow as one block; keep Qt from painting its own
+   selection/focus blocks for the item and the indentation area */
+QTreeWidget#ServerTree {{ outline: 0; show-decoration-selected: 0; }}
 QTreeWidget#ServerTree::item, QTreeWidget#ServerTree::item:selected, QTreeWidget#ServerTree::item:hover,
 QTreeWidget#ServerTree::item:selected:active, QTreeWidget#ServerTree::item:selected:!active {{
   background: transparent; border: none; }}

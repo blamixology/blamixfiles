@@ -10,7 +10,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QToolButton, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import __version__, keychain, updater
 from ..core import engine as E
@@ -25,6 +25,7 @@ from .dialogs import OverwriteDialog, SiteDialog
 from .editor import EditorTab
 from .file_pane import FilePane
 from .queue_view import QueueView
+from .rowtree import RowTree
 from .session import Session
 from . import platform_ui, theme
 from .theme import C, icon, style_window
@@ -422,7 +423,8 @@ class MainWindow(QMainWindow):
         add.clicked.connect(self.new_site)
         row.addWidget(add)
         sl.addLayout(row)
-        self.site_tree = QTreeWidget()
+        self.site_tree = RowTree()
+        self.site_tree.setObjectName("ServerTree")
         self.site_tree.setHeaderHidden(True)
         self.site_tree.setIndentation(12)
         self.site_tree.itemActivated.connect(self._site_activated)

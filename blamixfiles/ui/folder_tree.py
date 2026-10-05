@@ -5,17 +5,17 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QStyle, QTreeWidget, QTreeWidgetItem
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QTreeWidgetItem
 
+from .rowtree import RowTree
 from .theme import C, icon
 
 PATH = Qt.UserRole
 LOADED = Qt.UserRole + 1
 
 
-class FolderTree(QTreeWidget):
+class FolderTree(RowTree):
     navigate = Signal(str)
 
     def __init__(self, pane):
@@ -29,25 +29,6 @@ class FolderTree(QTreeWidget):
         self.itemExpanded.connect(self._expanded)
         self.itemClicked.connect(lambda it, _c: self.navigate.emit(it.data(0, PATH)))
         self._roots_loaded = False
-        self.setMouseTracking(True)
-
-    def drawRow(self, painter, option, index) -> None:  # noqa: N802
-        """Selection / hover as one rounded block across the whole row. Qt paints the item and the
-        expand-arrow area separately, which leaves a seam (and two rounded ends) in the middle."""
-        color = None
-        if self.selectionModel().isSelected(index):
-            color = C["selected"]
-        elif option.state & QStyle.State_MouseOver:
-            color = C["hover"]
-        if color:
-            painter.save()
-            painter.setRenderHint(QPainter.Antialiasing)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(color))
-            row = QRect(0, option.rect.y(), self.viewport().width(), option.rect.height())
-            painter.drawRoundedRect(row.adjusted(2, 0, -2, 0), 6, 6)
-            painter.restore()
-        super().drawRow(painter, option, index)
 
     # ------------------------------------------------------------ helpers
     def _new_item(self, parent, name: str, path: str) -> QTreeWidgetItem:
