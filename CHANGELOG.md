@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-10-06
+
+- Remove the bright 1px line along the tab bar (Fusion frame colors follow the theme background) (013a8df)
+
 ## 0.6.2 - 2026-10-06
 
 - Show the version in the sidebar footer (click for About) (886e171)
