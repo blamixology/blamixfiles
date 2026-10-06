@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.1 - 2026-10-07
+
+- Keychain on macOS/Linux: store the password as ASCII (macOS prints non-ASCII passwords as hex) (1bb462d)
+
 ## 1.0.0 - 2026-10-07
 
 - 1.0: CLI mkdir/rm/mv/log and --json, per-site speed limits, transfer log, TUI 2FA/view/edit/sites/themes, Linux and macOS updates, accessibility, more tests (09075ac)
