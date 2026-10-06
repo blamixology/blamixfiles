@@ -38,16 +38,41 @@ def test_keychain_commands_per_platform(monkeypatch):
     monkeypatch.setattr(keychain, "_run", fake_run)
     monkeypatch.setattr(keychain.sys, "platform", "darwin")
     assert keychain.save("acct", "pw") and keychain.load("acct") == "stored-secret" and keychain.delete("acct")
-    assert calls[0][0][:3] == ["security", "add-generic-password", "-U"] and "pw" in calls[0][0]
+    assert calls[0][0][:3] == ["security", "add-generic-password", "-U"] and keychain._wrap("pw") in calls[0][0]
     assert calls[1][0][:2] == ["security", "find-generic-password"] and calls[2][0][1] == "delete-generic-password"
     calls.clear()
     monkeypatch.setattr(keychain.sys, "platform", "linux")
     assert keychain.save("acct", "pw") and keychain.load("acct") == "stored-secret" and keychain.delete("acct")
-    assert calls[0][0][:2] == ["secret-tool", "store"] and calls[0][1] == b"pw"      # the secret goes via stdin
-    assert "pw" not in calls[0][0]
+    assert calls[0][0][:2] == ["secret-tool", "store"] and calls[0][1] == keychain._wrap("pw").encode()   # via stdin
+    assert keychain._wrap("pw") not in calls[0][0]
     assert calls[1][0][:2] == ["secret-tool", "lookup"] and calls[2][0][:2] == ["secret-tool", "clear"]
     monkeypatch.setattr(keychain, "_run", lambda cmd, stdin=None: None)               # tool missing
     assert keychain.load("acct") is None and not keychain.save("acct", "pw") and not keychain.delete("acct")
+
+
+def test_non_ascii_password_survives_macos_hex_output(monkeypatch):
+    """`security -w` prints a non-ASCII password as hex: the wrapped (ASCII) form round-trips anyway."""
+    store = {}
+
+    class R:
+        returncode = 0
+
+        def __init__(self, out=b""):
+            self.stdout = out
+
+    def fake_security(cmd, stdin=None):
+        if cmd[1] == "add-generic-password":
+            store["v"] = cmd[cmd.index("-w") + 1]
+            return R()
+        v = store["v"]
+        out = v if v.isascii() else v.encode("utf-8").hex()          # what the real tool does
+        return R(out.encode() + b"\n")
+    monkeypatch.setattr(keychain, "_run", fake_security)
+    monkeypatch.setattr(keychain.sys, "platform", "darwin")
+    for pw in ("pässword ✓ 123", "plain-ascii", "with\nnewline", "b64:looks-like-the-prefix"):
+        assert keychain.save("acct", pw) and keychain.load("acct") == pw
+    store["v"] = "old-plain-secret"                                    # saved by an older version
+    assert keychain.load("acct") == "old-plain-secret"
 
 
 def test_account_is_per_vault(tmp_path):

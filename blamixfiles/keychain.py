@@ -5,6 +5,7 @@ tools elsewhere. Every function fails soft: no keychain just means "type the pas
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import shutil
 import subprocess
@@ -36,6 +37,24 @@ def account_for(vault_path: Path) -> str:
     return "vault-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
+# `security ... -w` prints a password as HEX when it has non-ASCII characters (or a newline), so the
+# macOS / Linux stores keep the secret as plain ASCII: "b64:" + base64 of the UTF-8 text.
+_PREFIX = "b64:"
+
+
+def _wrap(secret: str) -> str:
+    return _PREFIX + base64.b64encode(secret.encode("utf-8")).decode("ascii")
+
+
+def _unwrap(stored: str) -> str:
+    if stored.startswith(_PREFIX):
+        try:
+            return base64.b64decode(stored[len(_PREFIX):], validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return ""
+    return stored                                       # saved by an older version: plain text
+
+
 def load(account: str) -> str | None:
     try:
         if sys.platform == "win32":
@@ -45,7 +64,7 @@ def load(account: str) -> str | None:
         else:
             r = _run(["secret-tool", "lookup", "service", SERVICE, "account", account])
         out = r.stdout.decode("utf-8") if r and r.returncode == 0 else ""
-        return out.rstrip("\r\n") or None
+        return _unwrap(out.rstrip("\r\n")) or None
     except Exception:
         return None
 
@@ -55,10 +74,10 @@ def save(account: str, secret: str) -> bool:
         if sys.platform == "win32":
             return _win_save(account, secret)
         if sys.platform == "darwin":
-            r = _run(["security", "add-generic-password", "-U", "-s", SERVICE, "-a", account, "-w", secret])
+            r = _run(["security", "add-generic-password", "-U", "-s", SERVICE, "-a", account, "-w", _wrap(secret)])
         else:
             r = _run(["secret-tool", "store", "--label", "BlamixFiles vault", "service", SERVICE,
-                      "account", account], stdin=secret.encode("utf-8"))
+                      "account", account], stdin=_wrap(secret).encode("ascii"))
         return bool(r and r.returncode == 0)
     except Exception:
         return False
