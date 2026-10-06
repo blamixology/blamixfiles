@@ -362,6 +362,10 @@ def apply_palette(app) -> None:
     pal.setColor(QPalette.Highlight, QColor(C["accent"]))
     pal.setColor(QPalette.HighlightedText, QColor(C["on_accent"]))
     pal.setColor(QPalette.PlaceholderText, QColor(C["faint"]))
+    # Fusion draws a 1 px line along the tab bar (and a few other frames) from these roles; the default
+    # light grays show as a bright stripe on a dark theme, so they take the background color
+    for role in (QPalette.Light, QPalette.Midlight, QPalette.Mid, QPalette.Dark, QPalette.Shadow):
+        pal.setColor(role, QColor(C["bg"]))
     pal.setColor(QPalette.ToolTipBase, QColor(C["surface2"]))
     pal.setColor(QPalette.ToolTipText, QColor(C["text"]))
     app.setPalette(pal)

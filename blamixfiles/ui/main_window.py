@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         vl.addWidget(qc)
 
         self.tabs = _Tabs()
+        self.tabs.tabBar().setDrawBase(False)       # the 1 px light line the style draws under the tabs
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
