@@ -434,7 +434,15 @@ class MainWindow(QMainWindow):
         coffee = QPushButton(icon("coffee", C["muted"]), "  Buy me a coffee", objectName="Ghost")
         coffee.setToolTip("BlamixFiles is free. If it saves you time, a coffee keeps it going.")
         coffee.clicked.connect(lambda: webbrowser.open(KOFI))
-        sl.addWidget(coffee)
+        ver = QPushButton(f"v{__version__}", objectName="Ghost")
+        ver.setToolTip("About BlamixFiles")
+        ver.setStyleSheet(f"color:{C['faint']}; font-size:8.5pt; padding:6px 8px;")
+        ver.clicked.connect(self.about)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(0)
+        bottom.addWidget(coffee, 1)
+        bottom.addWidget(ver)
+        sl.addLayout(bottom)
         return side
 
     def _build_welcome(self) -> QWidget:
