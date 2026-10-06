@@ -96,3 +96,121 @@ def test_tui_unlock_wrong_then_right(tmp_path, monkeypatch):
             await pilot.press(*"master", "enter")
             await until(lambda: isinstance(app.screen, T.SitesScreen))
     asyncio.run(go())
+
+
+def _kinds(app):
+    return [type(s).__name__ for s in app.screen_stack]
+
+
+def test_tui_site_add_edit_delete(tmp_path):
+    store = open_or_create(vault_path(), "master", create=True)
+
+    async def go():
+        app = T.BlamixFilesTUI(store)
+        async with app.run_test(size=(150, 40)) as pilot:
+            await until(lambda: isinstance(app.screen, T.SitesScreen))
+            await pilot.press("n")
+            await until(lambda: isinstance(app.screen, T.SiteScreen))
+            app.screen.query_one("#name").value = "Shop"
+            app.screen.query_one("#host").value = "ftp.example.com"
+            app.screen.query_one("#username").value = "me"
+            app.screen.query_one("#password").value = "secret"
+            app.screen.query_one("#port").value = "abc"
+            await pilot.click("#save")                                    # bad port: stays open
+            await until(lambda: "number" in str(app.screen.query_one("#err").render()))
+            app.screen.query_one("#port").value = "2121"
+            app.screen.query_one("#protocol").value = "ftp"
+            await pilot.pause()
+            app.screen.query_one("#save").press()
+            await until(lambda: isinstance(app.screen, T.SitesScreen))
+            (site,) = store.sites.values()
+            assert (site.name, site.host, site.port, site.protocol, site.auth) == ("Shop", "ftp.example.com", 2121, "ftp", "password")
+            assert app.screen.query_one(T.DataTable).row_count == 1
+
+            await pilot.press("e")
+            await until(lambda: isinstance(app.screen, T.SiteScreen))
+            app.screen.query_one("#group").value = "Work"
+            await pilot.click("#save")
+            await until(lambda: isinstance(app.screen, T.SitesScreen))
+            assert next(iter(store.sites.values())).group == "Work" and len(store.sites) == 1
+
+            await pilot.press("d")
+            await until(lambda: isinstance(app.screen, T.ConfirmScreen))
+            await pilot.click("#yes")
+            await until(lambda: not store.sites)
+    asyncio.run(go())
+
+
+def test_tui_view_and_edit_file(tmp_path, monkeypatch):
+    import contextlib
+    srv_root = tmp_path / "srv"
+    srv_root.mkdir()
+    (srv_root / "note.txt").write_text("line one\n")
+    (srv_root / "blob.bin").write_bytes(b"\x00\x01\x02")
+    with FTPTestServer(srv_root) as srv:
+        site = Site(name="ftp", protocol="ftp", host="127.0.0.1", port=srv.port, username=USER, password=PASSWORD)
+        store = open_or_create(vault_path(), "master", create=True)
+        store.upsert(site)
+
+        def fake_editor(cmd, check=False):
+            with open(cmd[-1], "a", encoding="utf-8") as f:
+                f.write("added by the editor\n")
+
+        async def go():
+            app = T.BlamixFilesTUI(store)
+            monkeypatch.setattr(app, "suspend", lambda: contextlib.nullcontext())
+            monkeypatch.setattr(T.subprocess, "run", fake_editor)
+            async with app.run_test(size=(150, 40)) as pilot:
+                await until(lambda: isinstance(app.screen, T.SitesScreen))
+                await pilot.press("enter")
+                await until(lambda: isinstance(app.screen, T.BrowserScreen) and "/note.txt" in app.screen.remote.entries)
+                scr = app.screen
+                await pilot.press("tab")
+                await until(lambda: scr.remote.has_focus_within)
+                names = [e.name for e in T.sort_entries([e for k, e in scr.remote.entries.items() if k != ".."])]
+                scr.remote.table.move_cursor(row=names.index("note.txt"))
+                await pilot.press("v")                                    # view
+                await until(lambda: isinstance(app.screen, T.TextScreen))
+                assert "line one" in app.screen.text
+                await pilot.press("escape")
+                await until(lambda: isinstance(app.screen, T.BrowserScreen))
+
+                await pilot.press("e")                                    # edit in "the editor"
+                await until(lambda: "added by the editor" in (srv_root / "note.txt").read_text())
+                assert (srv_root / "note.txt").read_text().startswith("line one")
+
+                scr.remote.table.move_cursor(row=names.index("blob.bin"))
+                await pilot.press("v")                                    # binary: refuses with a message, no screen
+                await asyncio.sleep(0.5)
+                assert isinstance(app.screen, T.BrowserScreen)
+        asyncio.run(go())
+
+
+def test_tui_two_factor_prompt_and_theme(tmp_path):
+    from blamixfiles.settings import Settings
+    store = open_or_create(vault_path(), "master", create=True)
+    settings = Settings()
+    settings["theme"] = "Nord"
+
+    async def go():
+        import threading
+        app = T.BlamixFilesTUI(store, settings)
+        async with app.run_test(size=(120, 36)) as pilot:
+            await until(lambda: isinstance(app.screen, T.SitesScreen))
+            assert app.theme == "blamix-nord"                              # from the saved setting
+            app.theme = "blamix-light"                                     # picked in the command palette
+            assert settings["theme"] == "Light"
+
+            answer = []
+            t = threading.Thread(target=lambda: answer.append(app._interactive("", "", [("Code: ", False)])))
+            t.start()
+            await until(lambda: isinstance(app.screen, T.AuthPromptScreen))
+            await pilot.press(*"123456", "enter")
+            await until(lambda: not t.is_alive())
+            assert answer == [["123456"]]
+    asyncio.run(go())
+
+
+def test_tui_theme_names():
+    assert T.resolve_theme_name("system") == "Midnight" and T.resolve_theme_name("light") == "Light"
+    assert T.resolve_theme_name("Nord") == "Nord" and T.resolve_theme_name("nonsense") == "Midnight"

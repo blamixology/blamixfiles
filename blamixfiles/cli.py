@@ -32,7 +32,7 @@ from .core.backends import open_backend
 from .core.backends.ftp import UntrustedCertificate
 from .core.errors import friendly
 from .models import Site, Store
-from .paths import vault_path
+from .paths import transfer_log_path, vault_path
 from .vault import Vault, WrongPassword
 
 
@@ -133,6 +133,74 @@ def cmd_tui(a) -> int:
     return 0
 
 
+def cmd_log(a) -> int:
+    lines = E.read_log(transfer_log_path(), a.lines)
+    if a.json:
+        keys = ["time", "status", "direction", "site", "source", "destination", "bytes", "seconds", "error"]
+        print(json.dumps([dict(zip(keys, ln.split("\t"))) for ln in lines], indent=2))
+    else:
+        for ln in lines:
+            print(ln.replace("\t", "  "))
+    return 0
+
+
+def cmd_mkdir(a) -> int:
+    site, path = resolve(a.target)
+    if not path or path == "/":
+        raise UsageError("Give the folder to create, e.g. mysite:/var/www/new")
+    b = connect(site)
+    try:
+        b.makedirs(path)
+    finally:
+        b.close()
+    return 0
+
+
+def cmd_rm(a) -> int:
+    site, path = resolve(a.target)
+    if not path or path.rstrip("/") == "":
+        raise UsageError("Refusing to delete the root folder")
+    b = connect(site)
+    try:
+        entry = b.stat(path)
+        if entry is None:
+            raise UsageError(f"Not found on the server: {path}")
+        if entry.is_dir and not entry.is_link and not a.recursive:
+            raise UsageError(f"{path} is a folder: add -r to delete it and everything in it")
+        if (site.production or entry.is_dir) and not a.yes:
+            if not sys.stdin.isatty():
+                raise UsageError("Add --yes to delete from a script")
+            if not _yes(f"Delete {path} on {site.label}?"):
+                return 1
+        if entry.is_dir and not entry.is_link:
+            b.remove_tree(path)
+        else:
+            b.remove(path)
+    finally:
+        b.close()
+    return 0
+
+
+def cmd_mv(a) -> int:
+    site, src = resolve(a.source)
+    dst = a.dest
+    if "://" in dst or (":" in dst and not dst.startswith("/")):
+        site2, dst = resolve(dst)
+        if site2.id != site.id and site2.address != site.address:
+            raise UsageError("mv works inside one server: use get and put to move between servers")
+    if not src or not dst.startswith("/"):
+        raise UsageError("Give absolute paths, e.g. mysite:/old/name /new/name")
+    b = connect(site)
+    try:
+        if b.stat(src) is None:
+            raise UsageError(f"Not found on the server: {src}")
+        b.makedirs(b.parent(dst))
+        b.rename(src, dst)
+    finally:
+        b.close()
+    return 0
+
+
 def cmd_sites(a) -> int:
     rows = sorted(store().sites.values(), key=lambda s: (s.group, s.label.lower()))
     if a.json:
@@ -162,7 +230,11 @@ def cmd_ls(a) -> int:
     return 0
 
 
-def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = False) -> int:
+def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = False,
+         as_json: bool = False, extra: dict | None = None) -> int:
+    """Run queued transfers. With as_json the only output is one JSON document on stdout."""
+    quiet = quiet or as_json
+
     def on_change(j: E.Job) -> None:
         if quiet or j.is_dir:
             return
@@ -176,7 +248,8 @@ def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = Fa
             print(f"✖ {j.src}: {j.error}", file=sys.stderr)
     eng = E.TransferEngine(lambda s: connect(s), workers=4, on_change=on_change,
                            policy=policy if policy != "ask" else "overwrite",
-                           limit_up=limit_kb * 1024, limit_down=limit_kb * 1024, verify=verify)
+                           limit_up=limit_kb * 1024, limit_down=limit_kb * 1024, verify=verify,
+                           log_path=transfer_log_path())
     try:
         jobs_fn(eng)
         eng.wait()
@@ -189,8 +262,14 @@ def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = Fa
         eng.shutdown()
     failed = [j for j in eng.jobs if j.status == E.FAILED]
     done = [j for j in eng.jobs if j.status == E.DONE and not j.is_dir]
-    if not quiet:
-        total = sum(j.size for j in done)
+    skipped = [j for j in eng.jobs if j.status == E.SKIPPED and not j.is_dir]
+    total = sum(j.size for j in done)
+    if as_json:
+        doc = dict(extra or {})
+        doc["result"] = {"done": len(done), "skipped": len(skipped), "bytes": total,
+                         "failed": [{"path": j.src, "error": j.error} for j in failed]}
+        print(json.dumps(doc, indent=2))
+    elif not quiet:
         print(f"{len(done)} file(s), {total / 1e6:.1f} MB" + (f", {len(failed)} failed" if failed else ""))
     return 1 if failed else 0
 
@@ -205,7 +284,7 @@ def cmd_get(a) -> int:
     if entry is None:
         raise UsageError(f"Not found on the server: {path}")
     os.makedirs(a.dest, exist_ok=True)
-    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet, a.limit, a.verify)
+    return _run(lambda eng: eng.download(site, entry, a.dest), a.policy, a.quiet, a.limit, a.verify, a.json)
 
 
 def cmd_put(a) -> int:
@@ -220,7 +299,7 @@ def cmd_put(a) -> int:
     def queue(eng):
         for src in a.sources:
             eng.upload(site, os.path.abspath(src), path)
-    return _run(queue, a.policy, a.quiet, a.limit, a.verify)
+    return _run(queue, a.policy, a.quiet, a.limit, a.verify, a.json)
 
 
 WATCH_STOP = threading.Event()      # (tests set it instead of pressing Ctrl+C)
@@ -251,7 +330,7 @@ def cmd_watch(a) -> int:
         elif j.status == E.FAILED:
             print(f"{stamp} ✖ {j.src}: {j.error}", file=sys.stderr, flush=True)
     eng = E.TransferEngine(lambda s: connect(s), workers=2, on_change=on_change, policy="overwrite",
-                           limit_up=a.limit * 1024)
+                           limit_up=a.limit * 1024, log_path=transfer_log_path())
     w = W.FolderWatcher(local, lambda rels: W.queue_uploads(eng, site, local, path, rels, join),
                         ignore=ignore, interval=a.interval,
                         on_error=lambda m: print(f"watch: {m}", file=sys.stderr))
@@ -361,10 +440,14 @@ def cmd_sync(a) -> int:
         plan = S.compare(loc, rem, os.path.abspath(local_root), remote_root, opt)
         if plan.to_check:
             S.resolve_checksums(plan, LocalBackend(), b)
+        doc = {"summary": plan.summary(), "actions": [
+            {"action": x.kind, "path": x.rel, "dir": x.is_dir, "reason": x.reason, "bytes": x.size}
+            for x in plan.actions]}
+        if a.json and (a.dry_run or not any(x.kind != S.CONFLICT for x in plan.actions)):
+            print(json.dumps(doc, indent=2))
+            return 0
         if a.json:
-            print(json.dumps({"summary": plan.summary(), "actions": [
-                {"action": x.kind, "path": x.rel, "dir": x.is_dir, "reason": x.reason, "bytes": x.size}
-                for x in plan.actions]}, indent=2))
+            pass                                    # printed once, with the result, after the run
         elif not a.quiet or a.dry_run:
             for x in plan.actions:
                 print(f"{S.ACTION_LABELS[x.kind]:24} {x.rel}{'/' if x.is_dir else ''}   ({x.reason})")
@@ -380,7 +463,7 @@ def cmd_sync(a) -> int:
             if not _yes(f"Delete {len(deletes)} item(s)?"):
                 return 1
         return _run(lambda eng: S.apply(plan, site, eng, b, LocalBackend()), "overwrite", a.quiet, a.limit,
-                    a.verify)
+                    a.verify, a.json, extra=doc)
     finally:
         b.close()
 
@@ -413,7 +496,24 @@ def main(argv: list[str] | None = None) -> None:
                        help="speed limit in KB/s (default: unlimited)")
         p.add_argument("--verify", action="store_true", help="compare checksums after each file")
         p.add_argument("-q", "--quiet", action="store_true")
+        p.add_argument("--json", action="store_true", help="print the result as one JSON document")
         p.set_defaults(fn=fn)
+    p = sub.add_parser("log", help="show the transfer log (one line per finished file)")
+    p.add_argument("-n", "--lines", type=int, default=50, help="how many of the latest lines (default 50)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_log)
+    p = sub.add_parser("mkdir", help="create a folder on the server (with its parents)")
+    p.add_argument("target", help="<site>:/path or a URL")
+    p.set_defaults(fn=cmd_mkdir)
+    p = sub.add_parser("rm", help="delete a file or folder on the server")
+    p.add_argument("target", help="<site>:/path or a URL")
+    p.add_argument("-r", "--recursive", action="store_true", help="needed for folders")
+    p.add_argument("--yes", action="store_true", help="don't ask (needed in scripts)")
+    p.set_defaults(fn=cmd_rm)
+    p = sub.add_parser("mv", help="rename or move a file or folder on the server")
+    p.add_argument("source", help="<site>:/path or a URL")
+    p.add_argument("dest", help="the new path on the same server (/new/path, or <site>:/new/path)")
+    p.set_defaults(fn=cmd_mv)
     p = sub.add_parser("sync", help="compare a local and a remote folder and bring them in line")
     p.add_argument("source", help="a saved profile name, or a local folder")
     p.add_argument("remote", nargs="?", help="<site>:/path or a URL (when source is a folder)")
@@ -423,7 +523,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--exclude", action="append", metavar="PATTERN", help="skip matching names/paths")
     p.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     p.add_argument("--yes", action="store_true", help="allow deletes without asking")
-    p.add_argument("--json", action="store_true", help="print the plan as JSON")
+    p.add_argument("--json", action="store_true", help="print the plan (and, when it runs, the result) as JSON")
     p.add_argument("--limit", type=int, default=0, metavar="KB/s")
     p.add_argument("--verify", action="store_true", help="compare checksums after each file")
     p.add_argument("--checksum", action="store_true",

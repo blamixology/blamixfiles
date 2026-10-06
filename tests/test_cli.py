@@ -91,3 +91,48 @@ def test_cli_sync(tmp_path, capsys, monkeypatch):
 
         code, out, _ = run(capsys, "profiles")
         assert "deploy" in out and "[mirror]" in out
+
+
+def test_cli_mkdir_mv_rm_and_json(tmp_path, capsys, monkeypatch):
+    import json
+    root = tmp_path / "srv"
+    (root / "www").mkdir(parents=True)
+    (root / "www" / "a.txt").write_text("hello")
+    with SFTPTestServer(root) as srv:
+        site = Site(name="web", protocol="sftp", host="127.0.0.1", port=srv.port,
+                    username=USER, password=PASSWORD)
+        open_or_create(vault_path(), "master", create=True).upsert(site)
+        monkeypatch.setenv("BLAMIXFILES_VAULT_PASSWORD", "master")
+        try:
+            ssh.open_client(site)
+        except ssh.UnknownHostKey as e:
+            ssh.trust_host_key(e.host_id, e.key)
+
+        assert run(capsys, "mkdir", "web:/www/new/deeper")[0] == 0
+        assert (root / "www" / "new" / "deeper").is_dir()
+        assert run(capsys, "mv", "web:/www/a.txt", "/www/new/b.txt")[0] == 0
+        assert (root / "www" / "new" / "b.txt").read_text() == "hello" and not (root / "www" / "a.txt").exists()
+
+        code, _, err = run(capsys, "rm", "web:/www/new")                     # folder without -r
+        assert code == 3 and "-r" in err
+        code, _, err = run(capsys, "rm", "-r", "web:/www/new")                # in a script: needs --yes
+        assert code == 3 and "--yes" in err
+        assert run(capsys, "rm", "-r", "--yes", "web:/www/new")[0] == 0
+        assert not (root / "www" / "new").exists()
+        assert run(capsys, "rm", "web:/")[0] == 3
+
+        up = tmp_path / "up.txt"
+        up.write_text("x")
+        code, out, err = run(capsys, "put", "--json", str(up), "web:/www")
+        assert out.strip(), err
+        doc = json.loads(out)
+        assert code == 0 and doc["result"]["done"] == 1 and doc["result"]["failed"] == []
+
+        local = tmp_path / "local"
+        local.mkdir()
+        (local / "n.txt").write_text("new")
+        code, out, err = run(capsys, "sync", "--json", str(local), "web:/www")
+        assert out.strip(), (code, err)
+        doc = json.loads(out)
+        assert code == 0 and doc["actions"] and doc["result"]["done"] >= 1
+        assert (root / "www" / "n.txt").read_text() == "new"

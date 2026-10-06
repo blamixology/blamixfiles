@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import collections
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 
@@ -16,9 +20,10 @@ from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
+from textual.theme import Theme
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, Static
 
 from . import keychain
 from .core import engine as E
@@ -26,10 +31,14 @@ from .core import ssh
 from .core.backends import open_backend
 from .core.backends.ftp import UntrustedCertificate
 from .core.backends.local import LocalBackend
+from .core.backends.scp import SCPBackend
+from .core.backends.sftp import SFTPBackend
 from .core.errors import friendly
 from .core.vfs import sort_entries
 from .models import Site, Store
-from .paths import vault_path
+from .paths import transfer_log_path, vault_path
+from .settings import Settings
+from .themes import DEFAULT_THEME, LEGACY, THEMES
 from .vault import Vault, VaultError, WrongPassword
 
 ACCENT = "#7c8cff"
@@ -49,6 +58,29 @@ def human_time(ts: float) -> str:
         return ""
     t = time.localtime(ts)
     return time.strftime("%d %b %H:%M" if abs(time.time() - ts) < 180 * 86400 else "%d %b  %Y", t)
+
+
+def editor_command(path: str) -> list[str]:
+    """$VISUAL / $EDITOR (may contain arguments), else something that exists on this system."""
+    import shlex
+    ed = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if ed:
+        return [*shlex.split(ed, posix=(sys.platform != "win32")), path]
+    for name in (("notepad",) if sys.platform == "win32" else ("nano", "vim", "vi")):
+        if shutil.which(name):
+            return [name, path]
+    return ["notepad" if sys.platform == "win32" else "vi", path]
+
+
+def _theme_id(name: str) -> str:
+    return "blamix-" + name.lower().replace(" ", "-")
+
+
+def resolve_theme_name(setting: str) -> str:
+    """The theme setting ("System", an old "dark"/"light", a name) -> one of THEMES. A terminal can't tell
+    whether the desktop is light or dark, so "System" is the dark default here."""
+    name = LEGACY.get(setting, setting)
+    return name if name in THEMES else DEFAULT_THEME
 
 
 class Declined(Exception):
@@ -136,6 +168,131 @@ class ChoiceScreen(_Modal):
         self.dismiss("cancel")
 
 
+class AuthPromptScreen(_Modal):
+    """Keyboard-interactive login prompts from the server (verification code, OTP, …)."""
+
+    def __init__(self, label: str, title: str, instructions: str, prompts: list):
+        super().__init__()
+        self.label, self.title_text, self.instructions, self.prompts = label, title, instructions, prompts
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(f"Sign in to [b]{self.label}[/b]" + (f"  {self.title_text}" if self.title_text else ""))
+            if self.instructions:
+                yield Label(self.instructions)
+            for i, (text, echo) in enumerate(self.prompts):
+                yield Label(text.strip() or "Response")
+                yield Input(password=not echo, id=f"p{i}")
+
+    def on_mount(self) -> None:
+        self.query(Input).first().focus()
+
+    @on(Input.Submitted)
+    def _submitted(self, ev: Input.Submitted) -> None:
+        inputs = list(self.query(Input))
+        i = inputs.index(ev.input)
+        if i + 1 < len(inputs):
+            inputs[i + 1].focus()
+        else:
+            self.dismiss([w.value for w in inputs])
+
+
+class TextScreen(_Modal):
+    """Read-only view of a text file."""
+    DEFAULT_CSS = """
+    TextScreen > Vertical { width: 90%; height: 85%; }
+    TextScreen #body { height: 1fr; overflow: auto; }
+    """
+
+    def __init__(self, title: str, text: str):
+        super().__init__()
+        self.title_text, self.text = title, text
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(f"[b]{self.title_text}[/b]   (Esc closes)")
+            with VerticalScroll(id="body"):
+                yield Static(Text(self.text))
+
+
+SITE_PROTOCOLS = [("SFTP", "sftp"), ("SCP", "scp"), ("FTP", "ftp"), ("FTPS (explicit)", "ftps"),
+                  ("FTPS (implicit)", "ftps-implicit"), ("WebDAV (HTTPS)", "webdavs"), ("WebDAV (HTTP)", "webdav"),
+                  ("S3", "s3")]
+
+
+class SiteScreen(_Modal):
+    """Add or edit a site: the everyday fields (jump hosts, FTP options … are set in the app)."""
+    DEFAULT_CSS = """
+    SiteScreen > Vertical { width: 100; height: auto; max-height: 100%; overflow-y: auto; }
+    SiteScreen .pair { height: auto; }
+    SiteScreen .pair > * { width: 1fr; margin-right: 1; }
+    SiteScreen Select { width: 1fr; }
+    """
+
+    def __init__(self, site: Site | None = None):
+        super().__init__()
+        self.site = site or Site()
+        self.is_new = site is None
+
+    def compose(self) -> ComposeResult:
+        s = self.site
+        with Vertical():
+            yield Label("[b]New site[/b]" if self.is_new else f"[b]Edit {s.label}[/b]")
+            with Horizontal(classes="pair"):
+                yield Input(s.name, placeholder="Name", id="name")
+                yield Select(SITE_PROTOCOLS, value=s.protocol, allow_blank=False, id="protocol")
+            with Horizontal(classes="pair"):
+                yield Input(s.host, placeholder="Host", id="host")
+                yield Input(str(s.port or ""), placeholder="Port (empty = default)", id="port")
+            with Horizontal(classes="pair"):
+                yield Input(s.username, placeholder="User name", id="username")
+                yield Input(s.password, placeholder="Password (empty = ask every time)", password=True,
+                            id="password")
+            with Horizontal(classes="pair"):
+                yield Input(s.key_path, placeholder="Private key file (SSH, optional)", id="key_path")
+                yield Input(s.remote_dir, placeholder="Start folder (optional)", id="remote_dir")
+            with Horizontal(classes="pair"):
+                yield Input(s.group, placeholder="Group (optional)", id="group")
+                yield Checkbox("Production server (confirm before uploading)", s.production, id="production")
+            yield Label("", id="err", classes="err")
+            with Horizontal(classes="row"):
+                yield Button("Cancel", id="cancel")
+                yield Button("Save", id="save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#name").focus()
+
+    @on(Button.Pressed)
+    def _pressed(self, ev: Button.Pressed) -> None:
+        if ev.button.id == "cancel":
+            self.dismiss(None)
+            return
+        s = self.site.copy()
+        s.id = self.site.id
+        s.name = self.query_one("#name", Input).value.strip()
+        s.protocol = str(self.query_one("#protocol", Select).value)
+        s.host = self.query_one("#host", Input).value.strip()
+        port = self.query_one("#port", Input).value.strip()
+        if port and not port.isdigit():
+            self.query_one("#err", Label).update("The port must be a number.")
+            return
+        if not s.host:
+            self.query_one("#err", Label).update("Enter a host.")
+            return
+        s.port = int(port) if port else 0
+        s.username = self.query_one("#username", Input).value.strip()
+        s.password = self.query_one("#password", Input).value
+        s.key_path = self.query_one("#key_path", Input).value.strip()
+        s.remote_dir = self.query_one("#remote_dir", Input).value.strip()
+        s.group = self.query_one("#group", Input).value.strip()
+        s.production = self.query_one("#production", Checkbox).value
+        if s.protocol in ("sftp", "scp"):
+            s.auth = "key" if s.key_path else ("password" if s.password else "ask")
+        else:
+            s.auth = "anonymous" if s.username.lower() == "anonymous" else ("password" if s.password else "ask")
+        self.dismiss(s)
+
+
 class UnlockScreen(Screen):
     DEFAULT_CSS = """
     UnlockScreen { align: center middle; }
@@ -185,6 +342,9 @@ class SitesScreen(Screen):
         Binding("enter", "connect", "Connect"),
         Binding("slash", "filter", "Filter"),
         Binding("u", "url", "Connect to URL"),
+        Binding("n", "new", "New site"),
+        Binding("e", "edit", "Edit"),
+        Binding("d", "delete", "Delete"),
         Binding("q", "app.quit", "Quit"),
     ]
     DEFAULT_CSS = """
@@ -258,6 +418,45 @@ class SitesScreen(Screen):
                 return
             self.app.open_site(site, start=path)
         self.app.push_screen(PromptScreen("Address (sftp://user@host/path, ftp://…, s3://…)"), got)
+
+    def _refill(self) -> None:
+        self.fill(self.query_one("#filter", Input).value)
+        self.query_one(DataTable).focus()
+
+    def _typing(self) -> bool:
+        return isinstance(self.app.focused, Input)
+
+    def action_new(self) -> None:
+        if self._typing():
+            return
+
+        def saved(site: Site | None) -> None:
+            if site is not None:
+                self.app.store.upsert(site)
+                self._refill()
+        self.app.push_screen(SiteScreen(), saved)
+
+    def action_edit(self) -> None:
+        site = None if self._typing() else self._selected()
+        if site is None:
+            return
+
+        def saved(new: Site | None) -> None:
+            if new is not None:
+                self.app.store.upsert(new)
+                self._refill()
+        self.app.push_screen(SiteScreen(site), saved)
+
+    def action_delete(self) -> None:
+        site = None if self._typing() else self._selected()
+        if site is None:
+            return
+
+        def done(ok: bool | None) -> None:
+            if ok:
+                self.app.store.delete(site.id)
+                self._refill()
+        self.app.push_screen(ConfirmScreen(f"Delete [b]{site.label}[/b] from your vault?", "Delete", danger=True), done)
 
     def show(self, msg: str) -> None:
         self.query_one("#msg", Static).update(msg)
@@ -406,6 +605,8 @@ class BrowserScreen(Screen):
         Binding("delete,d", "delete", "Delete"),
         Binding("ctrl+r", "refresh", "Refresh"),
         Binding("h", "hidden", "Hidden files"),
+        Binding("v", "view", "View"),
+        Binding("e,f4", "edit", "Edit"),
         Binding("x", "cancel_transfers", "Cancel transfers"),
         Binding("t", "retry", "Retry failed"),
         Binding("escape,q", "back", "Sites"),
@@ -440,8 +641,8 @@ class BrowserScreen(Screen):
         start_local = self.app.settings_last_dir or os.path.expanduser("~")
         self.local.load(start_local)
         self.remote.load(self.start or None)
-        self.engine = E.TransferEngine(lambda s: self.app.connect(s), workers=4, on_change=self._job_changed,
-                                       policy=self.policy, ask=self._ask_overwrite)
+        self.engine = E.TransferEngine(self._transfer_connection, workers=4, on_change=self._job_changed,
+                                       log_path=transfer_log_path(), policy=self.policy, ask=self._ask_overwrite)
         self.local.table.focus()
         self.set_interval(0.3, self._tick)
 
@@ -530,6 +731,14 @@ class BrowserScreen(Screen):
         src.marked.clear()
         self.app.notify(f"Queued {len(items)} item(s)")
         self._status()
+
+    def _transfer_connection(self, site):
+        """Transfer workers: SSH sites open another channel on the login that is already open, so
+        two-factor sites don't ask for a code again for every worker."""
+        b = self.remote.backend
+        if isinstance(b, (SFTPBackend, SCPBackend)) and b.connected:
+            return type(b).on_client(self.site, b.client)
+        return self.app.connect(site)
 
     def action_cancel_transfers(self) -> None:
         if self.engine:
@@ -621,6 +830,104 @@ class BrowserScreen(Screen):
             self._run(pane, rm, f"Deleted {what}")
         self.app.push_screen(ConfirmScreen(f"Delete [b]{what}[/b] from {where}?", "Delete", danger=True), got)
 
+    # ---- view / edit a file
+    VIEW_LIMIT = 1_000_000
+    EDIT_LIMIT = 5_000_000
+
+    def _current_file(self):
+        pane = self.active
+        cur = pane.current()
+        if not cur or cur[0] == ".." or cur[1] is None or cur[1].is_dir:
+            self.app.notify("Put the cursor on a file first.", severity="warning")
+            return None, None
+        return pane, cur[1]
+
+    def action_view(self) -> None:
+        pane, e = self._current_file()
+        if e is None:
+            return
+        if e.size > self.VIEW_LIMIT:
+            self.app.notify(f"{e.name} is larger than {human_size(self.VIEW_LIMIT)}: download it instead.",
+                            severity="warning")
+            return
+
+        def work() -> None:
+            try:
+                with pane.lock:
+                    data = pane.backend.read_bytes(e.path)
+            except Exception as ex:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, friendly(ex), severity="error")
+                return
+            if b"\0" in data[:8192]:
+                self.app.call_from_thread(self.app.notify, f"{e.name} looks like a binary file.", severity="warning")
+                return
+            text = data.decode("utf-8", errors="replace")
+            self.app.call_from_thread(self.app.push_screen, TextScreen(e.name, text))
+        self.app.run_worker(work, thread=True)
+
+    def action_edit(self) -> None:
+        """Download, open in $EDITOR (the TUI steps aside), upload again if it changed."""
+        pane, e = self._current_file()
+        if e is None:
+            return
+        if e.size > self.EDIT_LIMIT:
+            self.app.notify(f"{e.name} is larger than {human_size(self.EDIT_LIMIT)}.", severity="warning")
+            return
+
+        def work() -> None:
+            try:
+                with pane.lock:
+                    data = pane.backend.read_bytes(e.path)
+                    before = pane.backend.stat(e.path)
+            except Exception as ex:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, friendly(ex), severity="error")
+                return
+            self.app.call_from_thread(self._run_editor, pane, e, data, before)
+        self.app.run_worker(work, thread=True)
+
+    def _run_editor(self, pane: FilePane, e, data: bytes, before) -> None:
+        folder = tempfile.mkdtemp(prefix="blamixfiles-edit-")
+        path = os.path.join(folder, e.name)
+        with open(path, "wb") as f:
+            f.write(data)
+        try:
+            with self.app.suspend():
+                subprocess.run(editor_command(path), check=False)
+        except Exception as ex:  # noqa: BLE001
+            self.app.notify(f"Could not start the editor: {ex}", severity="error")
+            shutil.rmtree(folder, ignore_errors=True)
+            return
+        with open(path, "rb") as f:
+            new = f.read()
+        shutil.rmtree(folder, ignore_errors=True)
+        if new == data:
+            self.app.notify("No changes.")
+            return
+
+        def upload(force: bool) -> None:
+            def work() -> None:
+                try:
+                    with pane.lock:
+                        now = pane.backend.stat(e.path)
+                        changed = (before is not None and now is not None
+                                   and (now.size, int(now.mtime)) != (before.size, int(before.mtime)))
+                        if changed and not force:
+                            self.app.call_from_thread(ask_overwrite)
+                            return
+                        pane.backend.write_bytes(e.path, new)
+                except Exception as ex:  # noqa: BLE001
+                    self.app.call_from_thread(self.app.notify, friendly(ex), severity="error")
+                    return
+                self.app.call_from_thread(self.app.notify, f"Saved {e.name}")
+                self.app.call_from_thread(pane.load, pane.path, e.path)
+            self.app.run_worker(work, thread=True)
+
+        def ask_overwrite() -> None:
+            self.app.push_screen(ConfirmScreen(f"[b]{e.name}[/b] changed on the server while you edited it. "
+                                               "Overwrite it with your version?", "Overwrite", danger=True),
+                                 lambda ok: ok and upload(True))
+        upload(False)
+
     def action_back(self) -> None:
         busy = self.engine.pending() if self.engine else 0
         if busy:
@@ -648,13 +955,38 @@ class BlamixFilesTUI(App):
     BINDINGS = [Binding("ctrl+q", "quit", "Quit", show=False)]
     CSS = "Screen { background: $surface; }"
 
-    def __init__(self, store: Store | None = None):
+    def __init__(self, store: Store | None = None, settings=None):
         super().__init__()
         self.store = store
+        self.settings = settings if settings is not None else Settings()
         self.settings_last_dir = ""
+        self._theme_ready = False
+
+    # ---- themes: the same set as the desktop app (themes.py); Ctrl+P > "Change theme" switches
+    def _register_themes(self) -> None:
+        for name, t in THEMES.items():
+            c = t["colors"]
+            self.register_theme(Theme(
+                name=_theme_id(name), primary=c["accent"], secondary=c["accent2"], accent=c["accent"],
+                warning=c["warn"], error=c["danger"], success=c["ok"], foreground=c["text"],
+                background=c["bg"], surface=c["surface"], panel=c["surface2"], boost=c["hover"],
+                dark=t["dark"]))
+        chosen = resolve_theme_name(self.settings["theme"])
+        self.theme = _theme_id(chosen)
+        self._theme_ready = True
+
+    def watch_theme(self, theme_name: str) -> None:
+        """Remember the theme picked in the command palette."""
+        if not getattr(self, "_theme_ready", False):
+            return
+        for name in THEMES:
+            if _theme_id(name) == theme_name:
+                self.settings["theme"] = name
+                self.settings.save()
 
     # ---- start / unlock
     def on_mount(self) -> None:
+        self._register_themes()
         if self.store is not None:
             self.push_screen(SitesScreen())
             return
@@ -705,7 +1037,7 @@ class BlamixFilesTUI(App):
         """open_backend with the questions a login can raise. Call from a worker thread."""
         for _ in range(4):
             try:
-                return open_backend(site)
+                return open_backend(site, interactive=self._interactive)
             except ssh.UnknownHostKey as e:
                 msg = (f"First connection to [b]{e.host_id}[/b]\n{e.key.get_name()} {ssh.fingerprint(e.key)}\n\n"
                        "Trust this server?")
@@ -734,7 +1066,13 @@ class BlamixFilesTUI(App):
                 raise
         raise Declined("Could not connect")
 
+    def _interactive(self, title: str, instructions: str, prompts: list):
+        """Server prompts during login (2FA): asked on the screen, from the login's worker thread."""
+        label = getattr(self, "_connecting", "") or "the server"
+        return self.ask_modal(AuthPromptScreen(label, title, instructions, prompts))
+
     def open_site(self, site: Site, saved: Site | None = None, start: str = "") -> None:
+        self._connecting = site.label
         sites = self.screen if isinstance(self.screen, SitesScreen) else None
         if sites:
             sites.show(f"Connecting to {site.label} …")

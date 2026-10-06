@@ -256,6 +256,45 @@ def test_upload_respects_limit_and_cancel(served, tmp_path):
     eng.shutdown()
 
 
+def test_site_limit_and_transfer_log(served, tmp_path):
+    """A site's own limit slows only that site; every finished file is written to the log."""
+    import time as _t
+    site, root = served
+    site.limit_up_kb = 200
+    f = tmp_path / "site-limited.bin"
+    f.write_bytes(os.urandom(400_000))
+    log = tmp_path / "transfers.log"
+    eng = E.TransferEngine(lambda s: open_backend(s), workers=1, log_path=log)    # no global limit
+    start = _t.monotonic()
+    j = eng.upload(site, str(f), "/")
+    assert eng.wait(20) and j.status == E.DONE
+    assert _t.monotonic() - start > 1.2                       # the site limit applied
+    site.limit_up_kb = 0
+    f2 = tmp_path / "unlimited.bin"
+    f2.write_bytes(os.urandom(1000))
+    j2 = eng.upload(site, str(f2), "/")
+    assert eng.wait(20) and j2.status == E.DONE
+    eng.shutdown()
+    lines = E.read_log(log)
+    assert len(lines) == 2
+    cols = lines[0].split("\t")
+    assert cols[1] == "done" and cols[2] == "upload" and cols[4].endswith("site-limited.bin") and cols[6] == "400000"
+    assert E.read_log(tmp_path / "missing.log") == []
+
+
+def test_transfer_log_rotates_and_survives_bad_path(tmp_path):
+    from blamixfiles.core.engine import Job, TransferLog
+    job = Job("upload", Site(name="x"), "a\tb", "c\nd", size=1)
+    job.status = E.DONE
+    lg = TransferLog(tmp_path / "t.log")
+    lg.MAX_BYTES = 50
+    for _ in range(5):
+        lg.add(job)
+    assert (tmp_path / "t.log.1").exists() and len((tmp_path / "t.log").read_text().splitlines()) >= 1
+    assert all(len(ln.split("\t")) == 9 for ln in E.read_log(tmp_path / "t.log"))   # tabs/newlines in names are flattened
+    TransferLog(tmp_path / "no" / "such" / "dir" / "t.log").add(job)                # must not raise
+
+
 # ------------------------------------------------------------------ saved queue
 def test_queue_survives_restart(served, tmp_path):
     from blamixfiles.core.queue_store import QueueStore

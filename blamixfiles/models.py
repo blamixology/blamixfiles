@@ -46,6 +46,8 @@ class Site:
     s3_region: str = ""               # S3: region (empty = us-east-1 / provider default)
     jump_id: str = ""                 # SFTP/SCP: id of another saved site used as a jump host
     parallel: int = 3                 # simultaneous transfers for this site
+    limit_up_kb: int = 0              # speed limit for this site in KB/s (0 = none), on top of the global one
+    limit_down_kb: int = 0
     notes: str = ""
     last_connected: float = 0.0
     id: str = field(default_factory=_id)
@@ -81,6 +83,8 @@ class Site:
         s = cls(**{k: v for k, v in d.items() if k in known})
         s.port = int(s.port or 0)
         s.parallel = max(1, min(10, int(s.parallel or 3)))
+        s.limit_up_kb = max(0, int(s.limit_up_kb or 0))
+        s.limit_down_kb = max(0, int(s.limit_down_kb or 0))
         return s
 
     def copy(self) -> "Site":

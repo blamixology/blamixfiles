@@ -73,3 +73,7 @@ Updates: a quiet daily check on GitHub Releases, one-click install for the MSI a
 Terminal UI (`blamixfiles tui`): browse and copy between this computer and a server from any terminal, even over SSH.
 Installer: no desktop shortcut in the MSI any more (a Desktop folder on another drive made upgrades fail with error 1307);
 File → Create desktop shortcut does it from the app, and the in-app updater retries once without rollback files.
+1.0: CLI `mkdir`, `rm`, `mv`, `log` and `--json` results; speed limits per site and a transfer log (View → Transfer log…);
+the terminal UI got SSH two-factor prompts, view/edit files, site management and the app's themes; updates on
+Linux and macOS; named controls for screen readers and F6 to switch lists; more tests (MSI upgrade through the
+updater's own script, keychain commands, Linux swap script).

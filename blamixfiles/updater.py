@@ -8,16 +8,23 @@ How an update is applied depends on how BlamixFiles was installed:
   msi       Windows installer   -> download the new MSI, run it (upgrades in place)
   portable  Windows zip folder  -> download zip, a small script swaps the files after
                                    BlamixFiles exits (the data/ folder is kept), restarts
-  other     macOS / Linux / pip / source -> open the release page
+  linux     folder from the tar.gz -> download, a small script swaps the folder after the
+            app exits (the data/ folder is kept) and starts it again
+  mac       BlamixFiles.app from the zip -> same, with ditto
+  other     pip / source, or an app folder you can't write to -> open the release page
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import platform
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -80,6 +87,36 @@ def install_kind() -> str:
     return "linux"
 
 
+def mac_arch() -> str:
+    return "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+
+
+def app_target(kind: str | None = None) -> Path | None:
+    """What an update replaces: the app folder (Windows portable, Linux) or the .app bundle (macOS)."""
+    kind = kind or install_kind()
+    exe = Path(sys.executable).resolve()
+    if kind == "mac":
+        for parent in exe.parents:
+            if parent.suffix == ".app":
+                return parent
+        return None
+    if kind in ("portable", "linux", "msi"):
+        return exe.parent
+    return None
+
+
+def can_self_update(kind: str | None = None) -> bool:
+    """Windows installs update through the MSI / the script; on macOS and Linux the app has to sit in a
+    place this user may write to (not /Applications of another user, not /opt owned by root)."""
+    kind = kind or install_kind()
+    if kind in ("msi", "portable"):
+        return True
+    if kind in ("linux", "mac"):
+        target = app_target(kind)
+        return bool(target) and os.access(target, os.W_OK) and os.access(target.parent, os.W_OK)
+    return False
+
+
 def _get(url: str, timeout: float = 10):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
                                                "Accept": "application/vnd.github+json"})
@@ -124,6 +161,10 @@ def pick_asset(rel: Release, kind: str | None = None) -> Asset | None:
         return find(lambda n: n.endswith(".msi") and "x64" in n)
     if kind == "portable":
         return find(lambda n: n.startswith("blamixfiles-windows") and n.endswith(".zip"))
+    if kind == "linux":
+        return find(lambda n: n.startswith("blamixfiles-linux") and n.endswith(".tar.gz"))
+    if kind == "mac":
+        return find(lambda n: n == f"blamixfiles-macos-{mac_arch()}.zip")
     return None
 
 
@@ -243,20 +284,34 @@ def check_update_file(path: Path, kind: str | None = None, expected_sha256: str 
     """Problems with a local update package ('' = fine to install)."""
     kind = kind or install_kind()
     path = Path(path)
-    if kind not in ("msi", "portable"):
-        return ("On this system, install the new version by replacing the app (macOS / Linux) "
-                "or with pip; there's nothing to run from here.")
-    want = ".msi" if kind == "msi" else ".zip"
-    if path.suffix.lower() != want:
-        return ("This copy was installed with the installer: pick the .msi file (BlamixFiles-x.y.z-x64.msi)."
-                if kind == "msi" else "This is the portable version: pick BlamixFiles-windows-x64.zip.")
-    if kind == "portable":
-        try:
+    if kind not in ("msi", "portable", "linux", "mac"):
+        return ("This copy runs from source or was installed with pip: update it the same way "
+                "(git pull / pip install -U blamixfiles); there's nothing to run from here.")
+    if kind in ("linux", "mac") and not can_self_update(kind):
+        return ("This copy sits in a folder you can't write to, so it can't replace itself: "
+                "install the new version over it with the permissions that put it there.")
+    want = {"msi": ".msi", "portable": ".zip", "mac": ".zip", "linux": ".tar.gz"}[kind]
+    if not path.name.lower().endswith(want):
+        hints = {"msi": "This copy was installed with the installer: pick the .msi file (BlamixFiles-x.y.z-x64.msi).",
+                 "portable": "This is the portable version: pick BlamixFiles-windows-x64.zip.",
+                 "mac": f"Pick BlamixFiles-macos-{mac_arch()}.zip.",
+                 "linux": "Pick BlamixFiles-linux-x64.tar.gz."}
+        return hints[kind]
+    try:
+        if kind == "portable":
             with zipfile.ZipFile(path) as z:
                 if not any(n.endswith("BlamixFiles.exe") for n in z.namelist()):
                     return "That zip doesn't contain BlamixFiles.exe."
-        except zipfile.BadZipFile:
-            return "That file isn't a valid zip (incomplete copy?)."
+        elif kind == "mac":
+            with zipfile.ZipFile(path) as z:
+                if not any(n.startswith("BlamixFiles.app/Contents/MacOS/") for n in z.namelist()):
+                    return "That zip doesn't contain BlamixFiles.app."
+        elif kind == "linux":
+            with tarfile.open(path) as t:
+                if not any(m.name.endswith("/BlamixFiles") or m.name == "BlamixFiles" for m in t.getmembers()):
+                    return "That archive doesn't contain the BlamixFiles program."
+    except (zipfile.BadZipFile, tarfile.TarError, EOFError, OSError):
+        return "That file isn't a valid archive (incomplete copy?)."
     if expected_sha256.strip():
         if sha256_of(path).lower() != expected_sha256.strip().lower().removeprefix("sha256:"):
             return "The file's SHA-256 doesn't match the one you entered: don't install it."
@@ -352,6 +407,82 @@ rmdir /s /q "{new_dir.parent}" 2>nul
 """
 
 
+# ---------------------------------------------------------------- applying (macOS, Linux)
+def posix_update_script(kind: str, new: Path, target: Path, pid: int, work: Path) -> str:
+    """sh script: wait for the app (pid) to exit, swap the app folder / bundle for the new one (the
+    old one is put back if anything fails), keep a portable data/ folder, remove the leftovers and
+    start the new version."""
+    q = shlex.quote
+    new, target, work = new.as_posix(), target.as_posix(), work.as_posix()      # (forward slashes also work in Git Bash)
+    old = f"{target}.old"
+    if kind == "mac":
+        copy = f'ditto {q(new)} {q(target)} && {{ xattr -dr com.apple.quarantine {q(target)} 2>/dev/null; true; }}'
+        keep = ""
+        start = f"open {q(target)}"
+    else:
+        copy = f"cp -a {q(new)} {q(target)}"
+        keep = f'if [ -d {q(old + "/data")} ]; then cp -a {q(old + "/data")} {q(target + "/data")}; fi'
+        start = f'nohup {q(target + "/BlamixFiles")} >/dev/null 2>&1 &'
+    return f"""#!/bin/sh
+LOG="${{TMPDIR:-/tmp}}/blamixfiles-update.log"
+log() {{ echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }}
+log "update started, waiting for pid {pid}"
+i=0
+while kill -0 {pid} 2>/dev/null; do
+  i=$((i+1))
+  if [ "$i" -ge 20 ]; then log "pid {pid} still running after 20s: ending it"; kill -9 {pid} 2>/dev/null; break; fi
+  sleep 1
+done
+sleep 1
+rm -rf {q(old)}
+if ! mv {q(target)} {q(old)}; then log "could not move the old version away"; exit 1; fi
+if ! {{ {copy}; }}; then
+  log "copying the new version failed: putting the old one back"
+  rm -rf {q(target)}
+  mv {q(old)} {q(target)}
+  exit 1
+fi
+{keep}
+rm -rf {q(old)} {q(work)}
+log "updated"
+{start}
+rm -f "$0"
+"""
+
+
+def _extract(path: Path, work: Path, kind: str) -> Path:
+    """Unpack an update archive into `work`; returns the new app folder / bundle."""
+    if kind == "mac":
+        if shutil.which("ditto"):
+            subprocess.run(["ditto", "-x", "-k", str(path), str(work)], check=True)
+        else:                                          # (tests) zipfile loses exec bits, ditto keeps them
+            with zipfile.ZipFile(path) as z:
+                z.extractall(work)
+        new = work / "BlamixFiles.app"
+        if not (new / "Contents" / "MacOS").is_dir():
+            raise UpdateError("The downloaded package doesn't contain BlamixFiles.app")
+        return new
+    with tarfile.open(path) as t:
+        root = work.resolve()
+        for m in t.getmembers():
+            dest = (work / m.name).resolve()
+            if root != dest and root not in dest.parents:
+                raise UpdateError("The update archive contains an unsafe path; it was not installed.")
+            if m.issym() or m.islnk():
+                link = (dest.parent / m.linkname).resolve() if m.issym() else (work / m.linkname).resolve()
+                if root != link and root not in link.parents:
+                    raise UpdateError("The update archive contains an unsafe link; it was not installed.")
+        if hasattr(tarfile, "data_filter"):             # (Python 3.12+; our checks above cover older ones)
+            t.extractall(work, filter="data")
+        else:
+            t.extractall(work)
+    inner = work / "BlamixFiles"
+    new = inner if (inner / "BlamixFiles").exists() else work
+    if not (new / "BlamixFiles").exists():
+        raise UpdateError("The downloaded package doesn't contain the BlamixFiles program")
+    return new
+
+
 def apply_update(path: Path, kind: str | None = None) -> None:
     """Start installing the downloaded update. The caller must quit the app right after."""
     kind = kind or install_kind()
@@ -378,5 +509,21 @@ def apply_update(path: Path, kind: str | None = None) -> None:
         script = work.parent / f"blamixfiles-update-{os.getpid()}.bat"
         script.write_text(portable_update_script(new_dir, app_dir, os.getpid()), encoding="utf-8")
         subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags, close_fds=True)
+        return
+    if kind in ("linux", "mac"):
+        target = app_target(kind)
+        if target is None or not can_self_update(kind):
+            raise UpdateError("This copy sits in a folder you can't write to; use the release page.")
+        work = Path(tempfile.mkdtemp(prefix="blamixfiles-update-"))
+        try:
+            new = _extract(path, work, kind)
+        except (OSError, subprocess.CalledProcessError, tarfile.TarError, zipfile.BadZipFile) as e:
+            shutil.rmtree(work, ignore_errors=True)
+            raise UpdateError(f"Could not unpack the update: {e}") from None
+        script = work / "update.sh"
+        script.write_text(posix_update_script(kind, new, target, os.getpid(), work), encoding="utf-8")
+        script.chmod(0o755)
+        subprocess.Popen(["sh", str(script)], start_new_session=True, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
     raise UpdateError("Automatic install isn't available for this installation; use the release page.")

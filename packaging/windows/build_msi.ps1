@@ -135,5 +135,31 @@ Invoke-Msi "/x `"$nextMsi`" /qn ALLUSERS=2 MSIINSTALLPERUSER=1 /l*v uninstall-us
 if (Test-Path "$userDir\BlamixFiles.exe") { throw "per-user uninstall left files behind" }
 if (@(Get-Registered).Count) { throw "per-user uninstall left an Apps & features entry" }
 
+Write-Host "== just me: the in-app updater's own script upgrades $Version to $Next =="
+# the exact batch file the app writes when you click "Install & restart" (blamixfiles/updater.py),
+# run against the installed copy: waits for the app, runs msiexec, retries on 1603, restarts the app
+Invoke-Msi "/i `"$msi`" /qn ALLUSERS=2 MSIINSTALLPERUSER=1 /l*v install-user2.log" "install-user2.log"
+Assert-Registered $Version
+$updScript = Join-Path $env:TEMP "blamixfiles-update-test.bat"
+$env:PYTHONPATH = (Get-Location).Path
+python -c "import sys; from pathlib import Path; from blamixfiles import updater; Path(sys.argv[1]).write_text(updater.msi_update_script(Path(sys.argv[2]), Path(sys.argv[3]), 999999), encoding='utf-8')" $updScript $nextMsi $userDir
+if ($LASTEXITCODE -ne 0) { throw "could not generate the update script" }
+Remove-Item "$env:TEMP\blamixfiles-update.log" -Force -ErrorAction SilentlyContinue
+$u = Start-Process cmd.exe -ArgumentList "/c `"$updScript`"" -PassThru -WindowStyle Hidden
+if (-not $u.WaitForExit(300000)) { throw "the update script did not finish within 5 minutes" }
+Start-Sleep -Seconds 3
+if (-not (Select-String -Path "$env:TEMP\blamixfiles-update.log" -Pattern "msiexec finished with code (0|3010)" -Quiet)) {
+  Get-Content "$env:TEMP\blamixfiles-update.log" -ErrorAction SilentlyContinue
+  throw "the update script's msiexec did not succeed"
+}
+Assert-Registered $Next
+# it starts the app again: that is part of the update, so check for it, then stop it
+$restarted = [bool](Get-Process BlamixFiles -ErrorAction SilentlyContinue)
+Get-Process BlamixFiles -ErrorAction SilentlyContinue | Stop-Process -Force
+if (-not $restarted) { throw "the update script did not start the new version" }
+Remove-Item $updScript -Force -ErrorAction SilentlyContinue
+Invoke-Msi "/x `"$nextMsi`" /qn ALLUSERS=2 MSIINSTALLPERUSER=1 /l*v uninstall-user2.log" "uninstall-user2.log"
+if (@(Get-Registered).Count) { throw "uninstall after the script upgrade left an Apps & features entry" }
+
 Remove-Item $nextOut -Force
 Write-Host "MSI tests passed"

@@ -95,6 +95,7 @@ class QueueView(QWidget):
         lay.addWidget(self.banner)
 
         self.tree = QTreeWidget()
+        self.tree.setAccessibleName("Transfer queue")
         self.tree.setObjectName("Files")
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)

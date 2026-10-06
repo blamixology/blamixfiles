@@ -32,7 +32,7 @@ def test_release_and_asset_pick():
     assert rel.assets[0].sha256 == "ab" * 32
     assert U.pick_asset(rel, "msi").name.endswith(".msi")
     assert U.pick_asset(rel, "portable").name == "BlamixFiles-windows-x64.zip"
-    assert U.pick_asset(rel, "linux") is None and U.pick_asset(rel, "source") is None
+    assert U.pick_asset(rel, "linux").name.endswith(".tar.gz") and U.pick_asset(rel, "source") is None
 
 
 def test_check_uses_the_network_helper(monkeypatch):
@@ -94,7 +94,7 @@ def test_update_file_checks(tmp_path):
     assert U.check_update_file(good, "portable") == ""
     assert "doesn't contain" in U.check_update_file(bad, "portable")
     (tmp_path / "junk.zip").write_bytes(b"not a zip")
-    assert "valid zip" in U.check_update_file(tmp_path / "junk.zip", "portable")
+    assert "valid archive" in U.check_update_file(tmp_path / "junk.zip", "portable")
 
 
 def test_scripts_keep_data_and_restart(tmp_path, monkeypatch):
@@ -146,3 +146,109 @@ def test_updates_controller(monkeypatch, tmp_path):
     assert win.updates.button.isHidden()
     win.close()
     app.processEvents()
+
+
+# ---------------------------------------------------------------- macOS / Linux
+def test_pick_asset_linux_and_mac(monkeypatch):
+    rel = U.parse_release({"tag_name": "v2.0.0", "assets": [
+        {"name": "BlamixFiles-linux-x64.tar.gz", "browser_download_url": "u1"},
+        {"name": "BlamixFiles-macos-arm64.zip", "browser_download_url": "u2"},
+        {"name": "BlamixFiles-macos-x64.zip", "browser_download_url": "u3"}]})
+    assert U.pick_asset(rel, "linux").url == "u1"
+    monkeypatch.setattr(U, "mac_arch", lambda: "arm64")
+    assert U.pick_asset(rel, "mac").url == "u2"
+    monkeypatch.setattr(U, "mac_arch", lambda: "x64")
+    assert U.pick_asset(rel, "mac").url == "u3"
+
+
+def _tar(path, files: dict, extra=()):
+    import io
+    import tarfile
+    with tarfile.open(path, "w:gz") as t:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o755
+            t.addfile(info, io.BytesIO(data))
+        for info in extra:
+            t.addfile(info)
+
+
+def test_update_file_checks_linux_and_mac(tmp_path, monkeypatch):
+    monkeypatch.setattr(U, "can_self_update", lambda kind=None: True)
+    good = tmp_path / "BlamixFiles-linux-x64.tar.gz"
+    _tar(good, {"BlamixFiles/BlamixFiles": b"#!/bin/sh\n", "BlamixFiles/_internal/x": b"x"})
+    assert U.check_update_file(good, "linux") == ""
+    bad = tmp_path / "other.tar.gz"
+    _tar(bad, {"readme.txt": b"x"})
+    assert "doesn't contain" in U.check_update_file(bad, "linux")
+    assert "Pick BlamixFiles-linux" in U.check_update_file(tmp_path / "a.zip", "linux")
+    (tmp_path / "junk.tar.gz").write_bytes(b"not an archive")
+    assert "valid archive" in U.check_update_file(tmp_path / "junk.tar.gz", "linux")
+    mac = tmp_path / "BlamixFiles-macos-arm64.zip"
+    with zipfile.ZipFile(mac, "w") as z:
+        z.writestr("BlamixFiles.app/Contents/MacOS/BlamixFiles", "x")
+    assert U.check_update_file(mac, "mac") == ""
+    assert U.check_update_file(mac, "mac", "sha256:" + U.sha256_of(mac)) == ""
+    monkeypatch.setattr(U, "can_self_update", lambda kind=None: False)
+    assert "can't write to" in U.check_update_file(good, "linux")
+    assert "pip" in U.check_update_file(good, "source")
+
+
+def test_unsafe_archives_are_refused(tmp_path):
+    import tarfile
+    evil = tmp_path / "evil.tar.gz"
+    _tar(evil, {"../escape.txt": b"x", "BlamixFiles/BlamixFiles": b"x"})
+    with pytest.raises(U.UpdateError, match="unsafe path"):
+        U._extract(evil, tmp_path / "w1", "linux")
+    link = tarfile.TarInfo("BlamixFiles/link")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "../../../etc/passwd"
+    sym = tmp_path / "sym.tar.gz"
+    _tar(sym, {"BlamixFiles/BlamixFiles": b"x"}, extra=[link])
+    with pytest.raises(U.UpdateError, match="unsafe link"):
+        U._extract(sym, tmp_path / "w2", "linux")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+@pytest.mark.skipif(not __import__("shutil").which("sh"), reason="needs a POSIX shell")
+def test_linux_swap_script_keeps_data_and_restarts(tmp_path):
+    import subprocess
+    import time
+    app = tmp_path / "BlamixFiles"
+    (app / "data").mkdir(parents=True)
+    (app / "data" / "vault.bfv").write_text("my vault")
+    (app / "BlamixFiles").write_text("old version")
+    tar = tmp_path / "new.tar.gz"
+    _tar(tar, {"BlamixFiles/BlamixFiles": b'#!/bin/sh\ncd "$(dirname "$0")" && echo started > started.txt\n',
+               "BlamixFiles/_internal/lib": b"new lib"})
+    work = tmp_path / "work"
+    work.mkdir()
+    new = U._extract(tar, work, "linux")
+    script = work / "update.sh"
+    script.write_text(U.posix_update_script("linux", new, app, 2_000_000_000, work), encoding="utf-8", newline="\n")
+    subprocess.run(["sh", str(script)], check=True, timeout=60, env={**__import__("os").environ, "TMPDIR": str(tmp_path)})
+    assert (app / "_internal" / "lib").read_text() == "new lib"
+    assert (app / "data" / "vault.bfv").read_text() == "my vault"          # the user's data survived
+    assert not (tmp_path / "BlamixFiles.old").exists() and not work.exists()
+    for _ in range(50):                                                    # the new version was started
+        if (app / "started.txt").exists():
+            break
+        time.sleep(0.1)
+    assert (app / "started.txt").exists()
+
+
+@pytest.mark.skipif(not __import__("shutil").which("sh"), reason="needs a POSIX shell")
+def test_linux_swap_script_restores_the_old_version_on_failure(tmp_path):
+    import subprocess
+    app = tmp_path / "BlamixFiles"
+    app.mkdir()
+    (app / "BlamixFiles").write_text("old version")
+    work = tmp_path / "work"
+    work.mkdir()
+    script = work / "update.sh"
+    script.write_text(U.posix_update_script("linux", tmp_path / "does-not-exist", app, 2_000_000_000, work),
+                      encoding="utf-8", newline="\n")
+    r = subprocess.run(["sh", str(script)], timeout=60, env={**__import__("os").environ, "TMPDIR": str(tmp_path)})
+    assert r.returncode == 1
+    assert (app / "BlamixFiles").read_text() == "old version"

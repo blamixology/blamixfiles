@@ -422,6 +422,18 @@ class SiteDialog(_Base):
         self.parallel = QSpinBox()
         self.parallel.setRange(1, 10)
         self.parallel.setValue(s.parallel)
+        self.limit_up = QSpinBox()
+        self.limit_up.setRange(0, 10_000_000)
+        self.limit_up.setSuffix(" KB/s")
+        self.limit_up.setSpecialValueText("no limit")
+        self.limit_up.setValue(s.limit_up_kb)
+        self.limit_down = QSpinBox()
+        self.limit_down.setRange(0, 10_000_000)
+        self.limit_down.setSuffix(" KB/s")
+        self.limit_down.setSpecialValueText("no limit")
+        self.limit_down.setValue(s.limit_down_kb)
+        for w in (self.limit_up, self.limit_down):
+            w.setToolTip("Applies to this server only, on top of the limit in the transfer queue.")
         self.notes = QPlainTextEdit(s.notes)
         self.notes.setFixedHeight(60)
 
@@ -443,6 +455,8 @@ class SiteDialog(_Base):
         form.addRow("FTP", self.passive)
         form.addRow("Server time zone", self.tz)
         form.addRow("Parallel transfers", self.parallel)
+        form.addRow("Upload limit", self.limit_up)
+        form.addRow("Download limit", self.limit_down)
         form.addRow("Notes", self.notes)
         self.form = form
         lay.addLayout(form)
@@ -546,6 +560,8 @@ class SiteDialog(_Base):
         s.s3_region = self.region.text().strip()
         s.jump_id = (self.jump.currentData() or "") if s.is_ssh else ""
         s.parallel = self.parallel.value()
+        s.limit_up_kb = self.limit_up.value()
+        s.limit_down_kb = self.limit_down.value()
         s.notes = self.notes.toPlainText()
         return s
 
@@ -697,3 +713,53 @@ class AboutDialog(_Base):
         row.addWidget(close)
         lay.addSpacing(4)
         lay.addLayout(row)
+
+
+# ======================================================================= transfer log
+class TransferLogDialog(_Base):
+    """The latest finished transfers (newest first), from the plain-text log file."""
+
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        from ..core.engine import read_log
+        self._path = path
+        self._read = read_log
+        self.setWindowTitle("Transfer log")
+        self.resize(900, 460)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 14)
+        lay.addWidget(QLabel("Finished transfers", objectName="H2"))
+        lay.addWidget(QLabel(f"{path}", objectName="Hint"))
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        lay.addWidget(self.view, 1)
+        row = QHBoxLayout()
+        refresh = QPushButton(icon("refresh"), " Refresh")
+        refresh.clicked.connect(self.reload)
+        open_btn = QPushButton(icon("file"), " Open the file")
+        open_btn.clicked.connect(self._open)
+        close = QPushButton("Close", objectName="Primary")
+        close.clicked.connect(self.accept)
+        row.addWidget(refresh)
+        row.addWidget(open_btn)
+        row.addStretch(1)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.reload()
+
+    def reload(self) -> None:
+        lines = self._read(self._path, 500)
+        out = []
+        for ln in reversed(lines):
+            c = ln.split("\t") + [""] * 9
+            mark = {"done": "✔", "failed": "✖", "skipped": "·", "cancelled": "–"}.get(c[1], " ")
+            arrow = "→" if c[2] == "upload" else "←"
+            what = c[4] if c[2] == "upload" else c[5]
+            out.append(f"{c[0]}  {mark} {c[3]} {arrow} {what}  {c[6]} B" + (f"   {c[8]}" if c[8] else ""))
+        self.view.setPlainText("\n".join(out) if out else "Nothing transferred yet.")
+
+    def _open(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._path)))

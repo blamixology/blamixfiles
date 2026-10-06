@@ -430,3 +430,80 @@ def test_gui_edit_in_other_app_uploads_and_detects_conflicts(app, window, tmp_pa
         assert wait(app, lambda: (root / "www" / "app.js").read_text() == "console.log(4)\n", 10)
         ext.stop(e)
         assert not window.external_btn.isVisibleTo(window)
+
+
+# ------------------------------------------------------------------ 1.0 features
+def test_controls_have_accessible_names(app, tmp_path):
+    """Every button / search box in the window and in the site dialog can be named by a screen reader."""
+    from PySide6.QtWidgets import QAbstractButton, QLineEdit
+
+    from blamixfiles.ui.dialogs import SiteDialog
+    from blamixfiles.ui.main_window import MainWindow
+    store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+    site = Site(name="web", protocol="ftp", host="127.0.0.1", username=USER, password=PASSWORD, local_dir=str(tmp_path))
+    store.upsert(site)
+    win = MainWindow(store, Settings())
+    win.show()
+    app.processEvents()
+    unnamed = [(type(w).__name__, w.toolTip()) for w in win.findChildren(QAbstractButton)
+               if not (w.accessibleName() or w.text().strip())]
+    unnamed += [("QLineEdit", w.placeholderText()) for w in win.findChildren(QLineEdit)
+                if not w.accessibleName() and w.isVisibleTo(win) and w.placeholderText()]
+    assert not unnamed, unnamed
+    assert win.site_tree.accessibleName() == "Servers" and win.queue.tree.accessibleName() == "Transfer queue"
+    assert win.sidebar_btn.accessibleName() == "Show/hide the server list"
+
+    dlg = SiteDialog(site, [], win)
+    dlg.show()
+    app.processEvents()
+    assert not [w for w in dlg.findChildren(QAbstractButton) if not (w.accessibleName() or w.text().strip())]
+    dlg.close()
+    win.engine.shutdown()
+    win.close()
+
+
+def test_site_limits_in_dialog_and_transfer_log_dialog(app, tmp_path):
+    from blamixfiles.core.engine import Job, TransferLog
+    from blamixfiles.ui.dialogs import SiteDialog, TransferLogDialog
+    site = Site(name="web", protocol="sftp", host="h", limit_up_kb=300, limit_down_kb=0)
+    dlg = SiteDialog(site, [], None)
+    assert dlg.limit_up.value() == 300 and dlg.limit_down.value() == 0
+    dlg.limit_down.setValue(150)
+    s = dlg._collect()
+    assert (s.limit_up_kb, s.limit_down_kb) == (300, 150)
+    assert Site.from_dict({"name": "old"}).limit_up_kb == 0          # sites saved before 1.0 still load
+
+    log = tmp_path / "transfers.log"
+    j1 = Job("upload", site, "/local/a.txt", "/srv/a.txt", size=5)
+    j1.status, j1.done = E.DONE, 5
+    j2 = Job("download", site, "/srv/b.txt", "/local/b.txt", size=9)
+    j2.status, j2.error = E.FAILED, "connection lost"
+    for j in (j1, j2):
+        TransferLog(log).add(j)
+    d = TransferLogDialog(log)
+    text = d.view.toPlainText().splitlines()
+    assert "b.txt" in text[0] and "✖" in text[0] and "connection lost" in text[0]        # newest first
+    assert "a.txt" in text[1] and "✔" in text[1]
+    assert TransferLogDialog(tmp_path / "none.log").view.toPlainText() == "Nothing transferred yet."
+
+
+def test_f6_switches_between_the_two_lists(app, tmp_path):
+    from blamixfiles.ui.main_window import MainWindow
+    with FTPTestServer(tmp_path) as srv:
+        store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+        site = Site(name="ftp", protocol="ftp", host="127.0.0.1", port=srv.port, username=USER, password=PASSWORD,
+                    local_dir=str(tmp_path))
+        store.upsert(site)
+        win = MainWindow(store, Settings())
+        win.show()
+        win.open_site(store.sites[site.id])
+        tab = win.site_tabs()[0]
+        assert wait(app, lambda: tab.remote.entries is not None and tab.remote.path)
+        tab.local.tree.setFocus()
+        win.switch_pane()
+        assert wait(app, lambda: tab.remote.tree.hasFocus())
+        win.switch_pane()
+        assert wait(app, lambda: tab.local.tree.hasFocus())
+        win.engine.cancel()
+        tab.close()
+        win.engine.shutdown()

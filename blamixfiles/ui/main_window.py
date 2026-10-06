@@ -17,7 +17,7 @@ from ..core import engine as E
 from ..core.queue_store import QueueStore
 from ..core.vfs import Entry
 from ..models import Site, Store
-from ..paths import data_dir
+from ..paths import data_dir, transfer_log_path
 from ..settings import Settings
 from ..vault import Vault, WrongPassword
 from .bridge import ask_on_ui, on_ui
@@ -27,7 +27,7 @@ from .file_pane import FilePane
 from .queue_view import QueueView
 from .rowtree import RowTree
 from .session import Session
-from . import platform_ui, theme
+from . import a11y, platform_ui, theme
 from .theme import C, icon, style_window
 
 from ..links import COMPANY, COMPANY_URL, KOFI_URL as KOFI, REPO_URL as GITHUB
@@ -315,7 +315,8 @@ class MainWindow(QMainWindow):
                                        store=self.queue_store,
                                        limit_up=int(settings["limit_up_kb"]) * 1024,
                                        limit_down=int(settings["limit_down_kb"]) * 1024,
-                                       verify=bool(settings["verify_checksums"]))
+                                       verify=bool(settings["verify_checksums"]),
+                                       log_path=transfer_log_path())
         self._refresh_timer = QTimer(singleShot=True, interval=400)
         self._refresh_timer.timeout.connect(self._refresh_targets)
         self._refresh_dirs: set[tuple[int, str]] = set()
@@ -511,6 +512,8 @@ class MainWindow(QMainWindow):
         self.reload_profiles()
         v = mb.addMenu("&View")
         act(v, "Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "Ctrl+J")
+        act(v, "Switch between the two file lists", self.switch_pane, "F6")
+        act(v, "Transfer log…", self.show_transfer_log)
         act(v, "Show/hide server list", self.toggle_sidebar, "Ctrl+B")
         act(v, "Show/hide folder trees", self.toggle_trees, "Ctrl+T")
         tm = v.addMenu("Theme")
@@ -551,6 +554,17 @@ class MainWindow(QMainWindow):
     def unsaved_editors(self) -> list:
         return [self.tabs.widget(i) for i in range(self.tabs.count())
                 if isinstance(self.tabs.widget(i), EditorTab) and self.tabs.widget(i).dirty]
+
+    def switch_pane(self) -> None:
+        """F6: move the keyboard focus between this computer's list and the server's list."""
+        tab = self.tabs.currentWidget()
+        if isinstance(tab, SiteTab):
+            on_local = tab.local.isAncestorOf(QApplication.focusWidget() or tab)
+            (tab.remote if on_local else tab.local).tree.setFocus()
+
+    def show_transfer_log(self) -> None:
+        from .dialogs import TransferLogDialog
+        TransferLogDialog(transfer_log_path(), self).exec()
 
     def toggle_sidebar(self) -> None:
         show = not self.sidebar.isVisible()
@@ -620,6 +634,7 @@ class MainWindow(QMainWindow):
                    ("Import from WinSCP", self.import_winscp, "import"),
                    ("Import from BlamixShell", self.import_blamixshell, "import"),
                    ("Watch local folder & upload changes (current tab)", self.toggle_watch, "eye"),
+                   ("Transfer log", self.show_transfer_log, "download"),
                    ("Show/hide server list", self.toggle_sidebar, "sidebar"),
                    ("Show/hide folder trees", self.toggle_trees, "folder"),
                    ("Show/hide transfer queue", lambda: self.queue.setVisible(not self.queue.isVisible()), "download"),
@@ -913,6 +928,8 @@ class MainWindow(QMainWindow):
                              site.label)
         self.tabs.setTabToolTip(i, site.address)
         self.tabs.setCurrentIndex(i)
+        a11y.apply(tab)
+        tab.local.tree.setFocus()
         if self.tabs.indexOf(self.welcome) != -1:
             self.tabs.removeTab(self.tabs.indexOf(self.welcome))
 

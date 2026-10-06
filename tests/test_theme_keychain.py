@@ -6,18 +6,48 @@ import pytest
 from blamixfiles import keychain
 
 
-@pytest.mark.skipif(sys.platform != "win32" or not keychain.available(), reason="Windows Credential Manager only")
+@pytest.mark.skipif(not keychain.available(), reason="no OS keychain here")
 def test_keychain_roundtrip():
+    """Windows Credential Manager / macOS Keychain / Secret Service. A CI runner may have a keychain
+    tool but a locked or missing store: there only a refused save is tolerated (skipped)."""
     acct = "test-" + uuid.uuid4().hex
     try:
-        assert keychain.load(acct) is None
-        assert keychain.save(acct, "pässword ✓ 123")
+        if not keychain.save(acct, "pässword ✓ 123"):
+            if sys.platform == "win32":
+                pytest.fail("Credential Manager refused the save")
+            pytest.skip("the keychain here is locked or not usable")
         assert keychain.load(acct) == "pässword ✓ 123"
         assert keychain.save(acct, "second")          # overwrite
         assert keychain.load(acct) == "second"
     finally:
         keychain.delete(acct)
     assert keychain.load(acct) is None
+
+
+def test_keychain_commands_per_platform(monkeypatch):
+    """The macOS / Linux commands are built correctly (no real keychain needed)."""
+    calls = []
+
+    class R:
+        returncode = 0
+        stdout = b"stored-secret\n"
+
+    def fake_run(cmd, stdin=None):
+        calls.append((cmd, stdin))
+        return R()
+    monkeypatch.setattr(keychain, "_run", fake_run)
+    monkeypatch.setattr(keychain.sys, "platform", "darwin")
+    assert keychain.save("acct", "pw") and keychain.load("acct") == "stored-secret" and keychain.delete("acct")
+    assert calls[0][0][:3] == ["security", "add-generic-password", "-U"] and "pw" in calls[0][0]
+    assert calls[1][0][:2] == ["security", "find-generic-password"] and calls[2][0][1] == "delete-generic-password"
+    calls.clear()
+    monkeypatch.setattr(keychain.sys, "platform", "linux")
+    assert keychain.save("acct", "pw") and keychain.load("acct") == "stored-secret" and keychain.delete("acct")
+    assert calls[0][0][:2] == ["secret-tool", "store"] and calls[0][1] == b"pw"      # the secret goes via stdin
+    assert "pw" not in calls[0][0]
+    assert calls[1][0][:2] == ["secret-tool", "lookup"] and calls[2][0][:2] == ["secret-tool", "clear"]
+    monkeypatch.setattr(keychain, "_run", lambda cmd, stdin=None: None)               # tool missing
+    assert keychain.load("acct") is None and not keychain.save("acct", "pw") and not keychain.delete("acct")
 
 
 def test_account_is_per_vault(tmp_path):

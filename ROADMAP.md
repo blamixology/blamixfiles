@@ -2,7 +2,7 @@
 
 Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 
-## First release (0.1)
+## 1.0
 
 | | Feature |
 |---|---|
@@ -39,6 +39,12 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Unlock the vault with the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) |
 | ✅ | Themes (Midnight, Graphite, Nord, Solarized Dark, Light, High contrast, or follow the system): View → Theme, switches live |
 | ✅ | Updates: daily check on GitHub Releases, one-click install (MSI or portable), "Install update from file…" for offline PCs |
+| ✅ | Terminal UI: `blamixfiles tui`, with SSH two-factor prompts, view/edit files, add/edit/delete sites and the app's themes |
+| ✅ | Updates on Linux (tar.gz) and macOS (.app) when the app sits in a folder you can write to |
+| ✅ | CLI: `mkdir`, `rm`, `mv`, `log`, and `--json` for get / put / sync results |
+| ✅ | Speed limits per site; a transfer log (View → Transfer log…, `blamixfiles log`) |
+| ✅ | Accessibility: named controls for screen readers, F6 between the two lists |
+| ✅ | Tests: real MSI upgrade through the in-app updater's own script, keychain commands, Linux swap script |
 | 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line; the code is ready, commented out: search for `TODO(BlamixShell)`) |
 
 ## Later / maybe
@@ -46,4 +52,3 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | | Feature |
 |---|---|
 | 💡 | Google Drive, Dropbox, OneDrive |
-| ✅ | Terminal UI: `blamixfiles tui` (browse, copy, rename, delete over SSH) |

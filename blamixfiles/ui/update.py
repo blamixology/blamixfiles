@@ -139,7 +139,7 @@ class Updates(QObject):
         if not rel:
             return
         asset = updater.pick_asset(rel)
-        dlg = UpdateDialog(rel, __version__, can_install=asset is not None, parent=self.win)
+        dlg = UpdateDialog(rel, __version__, can_install=asset is not None and updater.can_self_update(), parent=self.win)
         dlg.exec()
         if dlg.choice == "skip":
             self.win.settings["skip_version"] = rel.version
@@ -147,7 +147,7 @@ class Updates(QObject):
             self.button.hide()
         elif dlg.choice == "page":
             QDesktopServices.openUrl(QUrl(rel.page))
-        elif dlg.choice == "install" and asset and self._confirm_quit("install the update"):
+        elif dlg.choice == "install" and asset and updater.can_self_update() and self._confirm_quit("install the update"):
             self._download(asset)
 
     def _confirm_quit(self, what: str) -> bool:
@@ -206,10 +206,14 @@ class Updates(QObject):
         """Offline update: install an MSI / portable zip that was copied to this computer."""
         win = self.win
         kind = updater.install_kind()
-        if kind not in ("msi", "portable"):
-            QMessageBox.information(win, "Install update from file", updater.check_update_file(Path("x"), kind))
+        problem = updater.check_update_file(Path("x"), kind) if kind not in ("msi", "portable", "linux", "mac") else ""
+        if kind in ("linux", "mac") and not updater.can_self_update(kind):
+            problem = updater.check_update_file(Path("x"), kind)
+        if problem:
+            QMessageBox.information(win, "Install update from file", problem)
             return
-        filt = "BlamixFiles installer (*.msi)" if kind == "msi" else "BlamixFiles portable (*.zip)"
+        filt = {"msi": "BlamixFiles installer (*.msi)", "portable": "BlamixFiles portable (*.zip)",
+                "mac": "BlamixFiles for macOS (*.zip)", "linux": "BlamixFiles for Linux (*.tar.gz)"}[kind]
         path, _ = QFileDialog.getOpenFileName(win, "Install update from file", str(Path.home() / "Downloads"), filt)
         if not path:
             return

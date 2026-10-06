@@ -78,6 +78,10 @@ def settings_path() -> Path:
     return data_dir() / "settings.json"
 
 
+def transfer_log_path() -> Path:
+    return data_dir() / "transfers.log"
+
+
 def known_hosts_path() -> Path:
     return data_dir() / "known_hosts"
 

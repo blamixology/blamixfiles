@@ -12,8 +12,8 @@ A free, open-source file transfer client: a modern FileZilla alternative.
 SFTP, SCP, FTP/FTPS, WebDAV and S3 in one portable app, a **built-in editor** that saves straight to
 the server, and an **encrypted password vault**. Windows, macOS and Linux, plus a CLI.
 
-> 🚧 **Work in progress.** Early development, not released yet. Sister app to
-> [BlamixShell](https://github.com/blamixology/blamixshell) (SSH client).
+> Sister app to [BlamixShell](https://github.com/blamixology/blamixshell) (SSH client): same vault format,
+> same themes, same look.
 
 ## Why another FTP client?
 
@@ -24,7 +24,7 @@ the server, and an **encrypted password vault**. Windows, macOS and Linux, plus 
 | Editing a remote file | download → external editor → confirm re-upload | Opens in a tab with syntax highlighting; **Ctrl+S** saves to the server |
 | Folder sync | highlights differences; no one-click sync | Compare → preview every change → apply; saved sync profiles |
 | S3, WebDAV | paid (FileZilla Pro) | included |
-| Scripting | no scripted transfers | `blamixfiles get/put/ls/sync` with saved sites |
+| Scripting | no scripted transfers | `blamixfiles get/put/ls/mv/rm/mkdir/sync` with saved sites, `--json` output |
 
 Also: saves from the editor go to a temp file that is then renamed over the original (no
 half-written configs if the connection drops), keep permissions, line endings and encoding,
@@ -62,6 +62,17 @@ code once; transfers reuse that login.
   BlamixShell (File → Import, or `blamixfiles import filezilla|winscp|blamixshell`)
 - **Old FTP servers:** file times from servers that only speak `LIST` are corrected for the server's
   time zone (detected automatically, or set per site), so sync doesn't re-copy unchanged files
+- **Speed limits and a log:** a limit for all transfers (queue toolbar) and one per server (site dialog),
+  and a plain-text transfer log (View → Transfer log…, `blamixfiles log`)
+- **Themes:** Midnight, Graphite, Nord, Solarized Dark, Light, High contrast, or follow the system; they
+  switch live (View → Theme)
+- **Keychain:** unlock the vault with Windows Credential Manager, macOS Keychain or the Linux Secret Service
+  (File → Unlock with …)
+- **Updates:** a quiet daily check on GitHub Releases and one-click install (Windows installer and portable,
+  Linux and macOS when the app sits in a folder you can write to); "Install update from file…" with a
+  SHA-256 check for computers without internet; admins can switch the check off (`policy.ini`)
+- **Keyboard and screen readers:** every control has a name, **F6** switches between the two lists,
+  **Ctrl+K** reaches every action
 - **Portable:** data (vault, known_hosts, settings) lives in `data/` next to the app
 
 ## Run from source
@@ -79,10 +90,15 @@ Needs Python 3.10+. The first run creates `.venv` and installs the requirements.
 ```
 blamixfiles sites
 blamixfiles ls   mysite:/var/www
+blamixfiles mkdir mysite:/var/www/new/deeper                    # with parents
+blamixfiles mv   mysite:/var/www/a.txt /var/www/archive/a.txt   # rename or move on the same server
+blamixfiles rm   -r --yes mysite:/var/www/old                   # folders need -r; scripts need --yes
+blamixfiles log  -n 20                                          # the latest finished transfers
 blamixfiles get  mysite:/var/log/nginx ./logs
 blamixfiles put  ./dist sftp://deploy@example.com/var/www --if-exists newer
 blamixfiles sync ./dist mysite:/var/www --mirror --dry-run     # preview, then drop --dry-run
 blamixfiles sync "Deploy web" --yes                             # a profile saved in the app
+blamixfiles sync ./dist mysite:/var/www --json                  # plan and result as one JSON document
 blamixfiles watch ./site mysite:/var/www --ignore "*.map"       # upload every change, Ctrl+C to stop
 blamixfiles import filezilla
 blamixfiles import winscp                                       # WinSCP.ini or the Windows registry
@@ -100,11 +116,13 @@ For servers with no desktop (works over SSH): `pip install "blamixfiles[tui]"`, 
 blamixfiles tui
 ```
 
-Unlock the vault, pick a site (`/` filters, `u` opens an address), then browse this computer on the left and
-the server on the right. `Tab` switches pane, `Space` marks files, `F5`/`c` copies to the other pane (with the
-same queue as the app: parallel, resume, "file exists" questions), `F7`/`m` new folder, `F2`/`r` rename,
-`Del`/`d` delete, `h` hidden files, `x` cancel transfers, `t` retry failed, `Esc` back to the sites.
-Sites are added and edited in the app.
+Unlock the vault, pick a site (`/` filters, `u` opens an address, `n`/`e`/`d` add, edit, delete a site), then
+browse this computer on the left and the server on the right. `Tab` switches pane, `Space` marks files,
+`F5`/`c` copies to the other pane (with the same queue as the app: parallel, resume, "file exists" questions),
+`F7`/`m` new folder, `F2`/`r` rename, `Del`/`d` delete, `v` view a text file, `e`/`F4` edit it in `$EDITOR`
+(uploaded again on save, with a check that nobody changed it meanwhile), `h` hidden files, `x` cancel
+transfers, `t` retry failed, `Esc` back to the sites. SSH two-factor prompts are asked on screen. Themes are
+the app's (`Ctrl+P` → "Change theme").
 
 ## Development
 

@@ -95,6 +95,43 @@ Connector = Callable[[object], Backend]
 OverwriteAsk = Callable[[Job, Entry], str]   # returns a policy name, "<policy>-all" or "cancel"
 
 
+class TransferLog:
+    """One line per finished file, tab-separated, kept in a plain text file:
+    time, status, direction, site, source, destination, bytes, seconds, error.
+    Rotated to <name>.1 above 2 MB, so it never grows without bound."""
+
+    MAX_BYTES = 2_000_000
+
+    def __init__(self, path):
+        self.path = path
+        self._lock = threading.Lock()
+
+    def add(self, job: Job) -> None:
+        secs = (job.finished or time.time()) - job.started if job.started else 0.0
+        fields = [time.strftime("%Y-%m-%d %H:%M:%S"), job.status, job.kind,
+                  getattr(job.site, "label", "") or "", job.src, job.dst, str(job.done), f"{secs:.1f}",
+                  job.error or ""]
+        line = "\t".join(f.replace("\t", " ").replace("\n", " ") for f in fields) + "\n"
+        try:
+            with self._lock:
+                p = os.fspath(self.path)
+                if os.path.exists(p) and os.path.getsize(p) > self.MAX_BYTES:
+                    os.replace(p, p + ".1")
+                with open(p, "a", encoding="utf-8") as f:
+                    f.write(line)
+        except OSError:
+            pass                                       # a log that can't be written never stops a transfer
+
+
+def read_log(path, last: int = 300) -> list[str]:
+    """The last `last` lines of the transfer log (oldest first), or []."""
+    try:
+        with open(os.fspath(path), encoding="utf-8", errors="replace") as f:
+            return f.read().splitlines()[-last:]
+    except OSError:
+        return []
+
+
 class TransferEngine:
     MAX_ATTEMPTS = 3
 
@@ -102,13 +139,17 @@ class TransferEngine:
                  on_change: Callable[[Job], None] | None = None,
                  policy: str = "overwrite", ask: OverwriteAsk | None = None,
                  preserve_mtime: bool = True, store=None, limit_up: int = 0, limit_down: int = 0,
-                 verify: bool = False):
+                 verify: bool = False, log_path=None):
         """store: optional QueueStore (unfinished jobs survive restarts).
-        limit_up / limit_down: bytes per second for all transfers together (0 = no limit)."""
+        limit_up / limit_down: bytes per second for all transfers together (0 = no limit); a site can
+        add its own limits (Site.limit_up_kb / limit_down_kb).
+        log_path: a file that gets one line per finished transfer (see TransferLog)."""
         self.connector = connector
         self.store = store
         self.verify = verify          # compare checksums after each file (when the server can)
         self.limits = {"upload": TokenBucket(limit_up), "download": TokenBucket(limit_down)}
+        self._site_buckets: dict[tuple[str, str], TokenBucket] = {}
+        self.log = TransferLog(log_path) if log_path else None
         self.on_change = on_change or (lambda j: None)
         self.policy = policy
         self.ask = ask
@@ -247,10 +288,26 @@ class TransferEngine:
                 self.store.sync(job)
             except Exception:
                 pass
+        if force and job.status in FINISHED and not job.is_dir and self.log is not None:
+            self.log.add(job)
         try:
             self.on_change(job)
         except Exception:
             pass
+
+    def _site_bucket(self, job: Job) -> TokenBucket | None:
+        """The site's own limit for this direction (None = the site has none)."""
+        kb = int(getattr(job.site, "limit_up_kb" if job.kind == "upload" else "limit_down_kb", 0) or 0)
+        if kb <= 0:
+            return None
+        key = (job.site.id, job.kind)
+        with self._cv:
+            bucket = self._site_buckets.get(key)
+            if bucket is None:
+                bucket = self._site_buckets[key] = TokenBucket(kb * 1024)
+            elif bucket.rate != kb * 1024:           # edited in the site dialog while running
+                bucket.rate = kb * 1024
+        return bucket
 
     def _next_job(self) -> Job | None:
         for j in self.jobs:
@@ -395,12 +452,15 @@ class TransferEngine:
 
     def _progress(self, job: Job):
         bucket = self.limits[job.kind]
+        site_bucket = self._site_bucket(job)
 
         def cb(n: int) -> None:
             if job.cancel_flag:
                 raise Cancelled()
             job.done += n
             bucket.consume(n, lambda: job.cancel_flag)
+            if site_bucket is not None:
+                site_bucket.consume(n, lambda: job.cancel_flag)
             self._emit(job)
 
         def skip(n: int) -> None:
@@ -470,7 +530,7 @@ class TransferEngine:
         if job.make_parents:
             os.makedirs(os.path.dirname(job.dst), exist_ok=True)
         # with a download limit, don't let SFTP read the whole file ahead at full speed
-        b.read_ahead = self.limits["download"].rate == 0
+        b.read_ahead = self.limits["download"].rate == 0 and not int(getattr(job.site, "limit_down_kb", 0) or 0)
         with open(job.dst, "r+b" if offset else "wb") as f:
             if offset:
                 f.seek(offset)

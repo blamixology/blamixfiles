@@ -209,11 +209,13 @@ class FilePane(QWidget):
         lay.addWidget(bar)
 
         self.tree = FileTree(self)
+        self.tree.setAccessibleName(f"{title} files")
         self.tree.itemActivated.connect(self._activated)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.dropped.connect(self._dropped)
         self.folders = FolderTree(self)
+        self.folders.setAccessibleName(f"{title} folder tree")
         self.folders.navigate.connect(lambda p: p != self.path and self.open_dir(p))
         self.split = QSplitter(Qt.Vertical)
         self.split.addWidget(self.folders)
