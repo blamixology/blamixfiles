@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-10-06
+
+- Show the version in the sidebar footer (click for About) (886e171)
+
 ## 0.6.1 - 2026-10-06
 
 - TUI: keep the cursor on refresh (fixes flaky copy test); updater script: escape the exe path (18a7222)
