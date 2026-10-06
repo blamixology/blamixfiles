@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-10-07
+
+- 1.0: CLI mkdir/rm/mv/log and --json, per-site speed limits, transfer log, TUI 2FA/view/edit/sites/themes, Linux and macOS updates, accessibility, more tests (09075ac)
+
 ## 0.6.3 - 2026-10-06
 
 - Remove the bright 1px line along the tab bar (Fusion frame colors follow the theme background) (013a8df)
