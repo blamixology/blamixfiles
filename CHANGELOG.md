@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-10-08
+
+- 1.1: cloud drives (Google Drive, Dropbox, OneDrive) and SMB; server search, folder sizes, bulk rename, file compare, server-to-server copy, queue order, scheduled syncs with hooks, watch list, SSH key setup, diagnostics (8dc9f8a)
+
 ## 1.0.1 - 2026-10-07
 
 - Keychain on macOS/Linux: store the password as ASCII (macOS prints non-ASCII passwords as hex) (1bb462d)
