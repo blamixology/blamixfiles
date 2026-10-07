@@ -214,10 +214,14 @@ class QueueView(QWidget):
             self.items[job.id] = it
             self.tree.addTopLevelItem(it)
             site = job.site.label
-            arrow = f"→ {site}: {job.dst}" if job.kind == "upload" else f"← {site}: {job.src}"
+            if job.kind == "relay":
+                arrow = f"{site}: {job.src}  →  {job.dst_site.label}: {job.dst}"
+            else:
+                arrow = f"→ {site}: {job.dst}" if job.kind == "upload" else f"← {site}: {job.src}"
             it.setText(1, arrow)
             it.setToolTip(1, arrow)
-            it.setIcon(0, icon("folder" if job.is_dir else ("upload" if job.kind == "upload" else "download"),
+            kind_icon = {"upload": "upload", "relay": "server"}.get(job.kind, "download")
+            it.setIcon(0, icon("folder" if job.is_dir else kind_icon,
                                C["accent"] if job.is_dir else C["muted"], 16))
             it.setText(0, job.name)
             it.setToolTip(0, job.src)
@@ -267,6 +271,15 @@ class QueueView(QWidget):
                 self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(it))
         self._update_summary()
 
+    def _move(self, jid: int, where: str) -> None:
+        """Reorder in the engine, then show the list in the same order."""
+        self.engine.move(jid, where)
+        order = {j.id: i for i, j in enumerate(self.engine.jobs)}
+        items = [self.tree.takeTopLevelItem(0) for _ in range(self.tree.topLevelItemCount())]
+        items.sort(key=lambda it: order.get(it.data(0, Qt.UserRole), 1 << 30))
+        self.tree.addTopLevelItems(items)
+        self.tree.setCurrentItem(self.items.get(jid))
+
     def _menu(self, pos) -> None:
         it = self.tree.itemAt(pos)
         if it is None:
@@ -275,4 +288,10 @@ class QueueView(QWidget):
         m = QMenu(self)
         m.addAction(icon("x"), "Cancel", lambda: self.engine.cancel(jid))
         m.addAction(icon("retry"), "Retry", lambda: self.engine.retry(jid))
+        job = next((j for j in self.engine.jobs if j.id == jid), None)
+        if job is not None and job.status == E.QUEUED:
+            m.addSeparator()
+            for label, where, ic in (("Move to the top (next)", "top", "up"), ("Move up", "up", "up"),
+                                     ("Move down", "down", "download"), ("Move to the bottom", "bottom", "download")):
+                m.addAction(icon(ic), label, lambda w=where: self._move(jid, w))
         m.exec(self.tree.viewport().mapToGlobal(pos))

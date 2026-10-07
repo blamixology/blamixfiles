@@ -23,6 +23,7 @@ DEFAULTS = {
     "check_updates": True,     # daily check against GitHub Releases (an admin policy can lock it off)
     "last_update_check": 0,
     "skip_version": "",        # "Skip this version" in the update dialog
+    "crash_seen": 0,           # newest crash report already offered (time)
     "external_editor": "",     # program for "Edit in another app" ("" = the system default app)
 }
 

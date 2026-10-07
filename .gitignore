@@ -9,3 +9,4 @@ data/
 *.egg-info/
 .ruff_cache/
 CHANGELOG.new
+blamixfiles/_oauth_ids.py

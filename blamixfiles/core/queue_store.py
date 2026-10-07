@@ -30,6 +30,8 @@ class QueueStore:
 
     def sync(self, job: Job) -> None:
         """Called on every status change."""
+        if job.kind == "relay":                  # server -> server copies aren't kept across restarts
+            return
         site_id = getattr(job.site, "id", "")
         if not site_id or not self.keep_site(site_id):
             return

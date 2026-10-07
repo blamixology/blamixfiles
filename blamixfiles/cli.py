@@ -67,6 +67,7 @@ _store_cache: list[Store] = []
 def store() -> Store:
     if not _store_cache:
         st = _store()
+        st.keep_tokens()
         _store_cache.append(st)
         ssh.set_site_resolver(lambda sid: st.sites.get(sid))      # jump hosts
     return _store_cache[0]
@@ -130,6 +131,151 @@ def cmd_tui(a) -> int:
     except ImportError:
         raise UsageError("The terminal UI needs Textual: pip install \"blamixfiles[tui]\"") from None
     BlamixFilesTUI().run()
+    return 0
+
+
+def _human(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return str(n)
+
+
+def cmd_find(a) -> int:
+    from .core import search as F
+    try:
+        q = F.Query(name=a.name or "", case_sensitive=a.case_sensitive,
+                    min_size=F.parse_size(a.larger) if a.larger else 0,
+                    max_size=F.parse_size(a.smaller) if a.smaller else 0,
+                    newer_than=time.time() - F.parse_age(a.newer) if a.newer else 0,
+                    older_than=time.time() - F.parse_age(a.older) if a.older else 0,
+                    kind=a.type, max_depth=a.depth)
+    except ValueError as e:
+        raise UsageError(str(e)) from None
+    site, path = resolve(a.target)
+    b = connect(site)
+    try:
+        hits = list(F.find(b, path or b.home(), q, limit=a.limit))
+    finally:
+        b.close()
+    if a.json:
+        print(json.dumps([{"path": e.path, "dir": e.is_dir, "size": e.size, "mtime": e.mtime} for e in hits], indent=2))
+    else:
+        for e in hits:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.mtime)) if e.mtime else " " * 16
+            print(f"{'' if e.is_dir else _human(e.size):>10}  {when}  {e.path}{'/' if e.is_dir else ''}")
+    return 0 if hits else 1
+
+
+def cmd_du(a) -> int:
+    from .core import search as F
+    site, path = resolve(a.target)
+    b = connect(site)
+    try:
+        u = F.folder_size(b, path or b.home())
+    finally:
+        b.close()
+    if a.json:
+        print(json.dumps({"bytes": u.bytes, "files": u.files, "folders": u.folders, "unreadable": u.unreadable}))
+    else:
+        print(f"{_human(u.bytes)}  ({u.bytes} bytes) in {u.files} file(s), {u.folders} folder(s)"
+              + (f"; {u.unreadable} folder(s) couldn't be read" if u.unreadable else ""))
+    return 0
+
+
+def cmd_keygen(a) -> int:
+    from .core import keys as K
+    path = a.path or str(K.default_key_path())
+    pw = ""
+    if not a.no_passphrase and sys.stdin.isatty():
+        pw = getpass.getpass("Passphrase for the new key (empty = none): ")
+        if pw and getpass.getpass("Again: ") != pw:
+            raise UsageError("The passphrases don't match")
+    try:
+        line = K.generate(path, pw, a.comment or "")
+    except K.KeyError_ as e:
+        raise UsageError(str(e)) from None
+    print(f"Created {path} and {path}.pub")
+    print(line)
+    return 0
+
+
+def cmd_copy_id(a) -> int:
+    from .core import keys as K
+    site, _ = resolve(a.target if ":" in a.target or "://" in a.target else a.target + ":")
+    if not site.is_ssh:
+        raise UsageError(f"{site.label} isn't an SSH site")
+    pub = a.key or (site.key_path + ".pub" if site.key_path else str(K.default_key_path()) + ".pub")
+    try:
+        line = K.read_public_key(pub)
+    except (OSError, K.KeyError_) as e:
+        raise UsageError(str(e)) from None
+    b = connect(site)
+    try:
+        added = K.install(b, line)
+    except K.KeyError_ as e:
+        raise UsageError(str(e)) from None
+    finally:
+        b.close()
+    print(f"{'Added' if added else 'Already there:'} {pub} → {site.label}:~/.ssh/authorized_keys")
+    return 0
+
+
+def cmd_schedule(a) -> int:
+    from .core import schedule as SC
+    if not SC.available():
+        raise UsageError("No scheduler found (schtasks on Windows, crontab elsewhere)")
+    if a.list or not a.profile:
+        rows = SC.listing()
+        for name, what in sorted(rows.items()):
+            print(f"{name:30} {what}")
+        if not rows:
+            print("No scheduled syncs.")
+        return 0
+    if store().find_profile(a.profile) is None:
+        raise UsageError(f"No sync profile named '{a.profile}' (see: blamixfiles profiles)")
+    if a.off:
+        print("Removed." if SC.remove(a.profile) else "It wasn't scheduled.")
+        return 0
+    try:
+        when = SC.When.parse(a.daily or "", a.every or "")
+    except ValueError as e:
+        raise UsageError(str(e)) from None
+    if not keychain.load(keychain.account_for(vault_path())):
+        print("Note: a scheduled sync opens the vault with the password saved in the OS keychain. Switch on "
+              "File > Unlock with … in the app (or it will fail to start).", file=sys.stderr)
+    SC.install(a.profile, when)
+    print(f"'{a.profile}' will sync {when.describe()}. Results: blamixfiles log")
+    return 0
+
+
+def cmd_login(a) -> int:
+    import json as _json
+
+    from .core import oauth
+    site = store().find(a.site)
+    if site is None:
+        raise UsageError(f"No saved site named '{a.site}' (add it in the app: Google Drive, Dropbox or OneDrive)")
+    if not site.is_cloud:
+        raise UsageError(f"{site.label} doesn't use a browser sign-in")
+    try:
+        cid, secret = oauth.client_for(site)
+        print("Opening the sign-in page in your browser … (finish there; waiting up to 5 minutes)", file=sys.stderr)
+        token = oauth.authorize(site.protocol, cid, secret,
+                                open_browser=lambda url: (print(url, file=sys.stderr), __import__("webbrowser").open(url)))
+    except oauth.OAuthError as e:
+        raise UsageError(str(e)) from None
+    site.oauth_token = _json.dumps(token)
+    store().save()
+    print(f"Signed in. {site.label} is ready.")
+    return 0
+
+
+def cmd_diagnostics(a) -> int:
+    from . import diagnostics
+    from .settings import Settings
+    print(diagnostics.report(Settings().data), end="")
     return 0
 
 
@@ -231,7 +377,7 @@ def cmd_ls(a) -> int:
 
 
 def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = False,
-         as_json: bool = False, extra: dict | None = None) -> int:
+         as_json: bool = False, extra: dict | None = None, on_done=None) -> int:
     """Run queued transfers. With as_json the only output is one JSON document on stdout."""
     quiet = quiet or as_json
 
@@ -264,6 +410,14 @@ def _run(jobs_fn, policy: str, quiet: bool, limit_kb: int = 0, verify: bool = Fa
     done = [j for j in eng.jobs if j.status == E.DONE and not j.is_dir]
     skipped = [j for j in eng.jobs if j.status == E.SKIPPED and not j.is_dir]
     total = sum(j.size for j in done)
+    if on_done is not None:
+        hooks = on_done({"status": "failed" if failed else "ok", "files": len(done), "bytes": total,
+                         "failed": len(failed)})
+        if hooks and not as_json:
+            for h in hooks:
+                print(f"· {h}", file=sys.stderr)
+        if hooks:
+            extra = dict(extra or {}, hooks=hooks)
     if as_json:
         doc = dict(extra or {})
         doc["result"] = {"done": len(done), "skipped": len(skipped), "bytes": total,
@@ -413,9 +567,11 @@ def cmd_sync(a) -> int:
         if site is None:
             raise UsageError(f"The site of profile '{prof.name}' was deleted")
         site, local_root, remote_root, opt = site.copy(), prof.local_dir, prof.remote_dir, prof.options
+        hooks = prof if (prof.after_command or prof.webhook_url) else None
     else:
         site, remote_root = resolve(a.remote)
         local_root = a.source
+        hooks = None
         opt = S.SyncOptions(tolerance=2.0 if site.is_ssh else 60.0)
     if a.direction:
         opt.direction = a.direction
@@ -462,10 +618,20 @@ def cmd_sync(a) -> int:
                                  "in scripts (or run with --dry-run first)")
             if not _yes(f"Delete {len(deletes)} item(s)?"):
                 return 1
+        on_done = None
+        if hooks is not None:
+            def on_done(result):
+                result.update(site=site.label, local=os.path.abspath(local_root), remote=remote_root)
+                return S.run_hooks(hooks.name, hooks.after_command, hooks.webhook_url, result)
         return _run(lambda eng: S.apply(plan, site, eng, b, LocalBackend()), "overwrite", a.quiet, a.limit,
-                    a.verify, a.json, extra=doc)
+                    a.verify, a.json, extra=doc, on_done=on_done)
     finally:
         b.close()
+
+
+# the sub-commands (the packaged app hands these to the command line instead of opening a window)
+COMMANDS = {"tui", "sites", "ls", "get", "put", "find", "du", "mkdir", "rm", "mv", "keygen", "copy-id", "sync",
+            "schedule", "watch", "profiles", "import", "log", "diagnostics", "login"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -498,6 +664,45 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("-q", "--quiet", action="store_true")
         p.add_argument("--json", action="store_true", help="print the result as one JSON document")
         p.set_defaults(fn=fn)
+    p = sub.add_parser("find", help="search a server folder (and below) by name, size or age")
+    p.add_argument("target", help="<site>:/path or a URL")
+    p.add_argument("--name", help='a wildcard pattern ("*.log") or part of the name')
+    p.add_argument("--case-sensitive", action="store_true")
+    p.add_argument("--larger", metavar="SIZE", help="at least this big, e.g. 10M")
+    p.add_argument("--smaller", metavar="SIZE", help="at most this big, e.g. 500k")
+    p.add_argument("--newer", metavar="AGE", help="changed within, e.g. 12h, 7d")
+    p.add_argument("--older", metavar="AGE", help="not changed for, e.g. 30d")
+    p.add_argument("--type", choices=["any", "file", "folder"], default="any")
+    p.add_argument("--depth", type=int, default=0, help="how many folder levels down (0 = all)")
+    p.add_argument("--limit", type=int, default=10_000)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_find)
+    p = sub.add_parser("du", help="total size of a server folder")
+    p.add_argument("target", help="<site>:/path or a URL")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_du)
+    p = sub.add_parser("keygen", help="make a new SSH key pair (Ed25519)")
+    p.add_argument("path", nargs="?", help="private key file (default ~/.ssh/id_ed25519_blamixfiles)")
+    p.add_argument("--comment", help="text at the end of the public key")
+    p.add_argument("--no-passphrase", action="store_true", help="don't ask for a passphrase")
+    p.set_defaults(fn=cmd_keygen)
+    p = sub.add_parser("copy-id", help="add your public key to a server's authorized_keys")
+    p.add_argument("target", help="a saved SSH site (or <site>:, or a URL)")
+    p.add_argument("--key", help="the .pub file (default: the site's key + .pub, or the BlamixFiles key)")
+    p.set_defaults(fn=cmd_copy_id)
+    p = sub.add_parser("schedule", help="run a sync profile on a schedule (Task Scheduler / cron)")
+    p.add_argument("profile", nargs="?")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--daily", metavar="HH:MM", help="every day at this time")
+    g.add_argument("--every", metavar="HOURS", help="every N hours (1-23)")
+    g.add_argument("--off", action="store_true", help="stop running it")
+    g.add_argument("--list", action="store_true", help="show the scheduled profiles")
+    p.set_defaults(fn=cmd_schedule)
+    p = sub.add_parser("login", help="sign in to a Google Drive / Dropbox / OneDrive site (opens the browser)")
+    p.add_argument("site")
+    p.set_defaults(fn=cmd_login)
+    p = sub.add_parser("diagnostics", help="print versions, settings and recent transfers for a problem report")
+    p.set_defaults(fn=cmd_diagnostics)
     p = sub.add_parser("log", help="show the transfer log (one line per finished file)")
     p.add_argument("-n", "--lines", type=int, default=50, help="how many of the latest lines (default 50)")
     p.add_argument("--json", action="store_true")

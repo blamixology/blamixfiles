@@ -85,3 +85,7 @@ File → Create desktop shortcut does it from the app, and the in-app updater re
 the terminal UI got SSH two-factor prompts, view/edit files, site management and the app's themes; updates on
 Linux and macOS; named controls for screen readers and F6 to switch lists; more tests (MSI upgrade through the
 updater's own script, keychain commands, Linux swap script).
+1.1: Google Drive, Dropbox, OneDrive and SMB; search a server and folder sizes; bulk rename; compare two files;
+server-to-server copy; reorder the queue; scheduled syncs with after-sync commands and webhooks; a live list for
+folder watches; SSH key setup (also `keygen` / `copy-id`); diagnostics and crash reports. New CLI commands:
+`find`, `du`, `keygen`, `copy-id`, `schedule`, `login`, `diagnostics`.

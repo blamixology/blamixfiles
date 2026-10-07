@@ -77,6 +77,7 @@ class Job:
     key: str = field(default_factory=lambda: uuid.uuid4().hex)   # stable id for the saved queue
     make_parents: bool = False    # create missing parent folders first (sync jobs)
     verified: str = ""            # "sha256"/"md5" when checked, "unsupported", or "" (not checked)
+    dst_site: object = None       # relay (server -> server) jobs: where the copy goes
 
     @property
     def name(self) -> str:
@@ -181,6 +182,38 @@ class TransferEngine:
                   is_dir=entry.is_dir, size=entry.size, mtime=entry.mtime)
         self._add([job])
         return job
+
+    def relay(self, site, entry: Entry, dst_site, dst_dir: str, dst_join=None) -> Job:
+        """Copy a file or folder from one server to another (or to another folder on the same one).
+        The data passes through this computer in a temporary file that is deleted right after."""
+        join = dst_join or (lambda a, b: (a.rstrip("/") + "/" + b) if a != "/" else "/" + b)
+        job = Job("relay", site, entry.path, join(dst_dir, entry.name), is_dir=entry.is_dir,
+                  size=entry.size, mtime=entry.mtime, dst_site=dst_site)
+        self._add([job])
+        return job
+
+    def move(self, job_id: int, where: str) -> None:
+        """Reorder a waiting job: where = "top" | "up" | "down" | "bottom"."""
+        with self._cv:
+            job = next((j for j in self.jobs if j.id == job_id), None)
+            if job is None or job.status != QUEUED:
+                return
+            i = self.jobs.index(job)
+            waiting = [k for k, j in enumerate(self.jobs) if j.status == QUEUED]
+            pos = waiting.index(i)
+            if where == "top":
+                target = waiting[0]
+            elif where == "bottom":
+                target = waiting[-1]
+            elif where == "up":
+                target = waiting[max(0, pos - 1)]
+            else:
+                target = waiting[min(len(waiting) - 1, pos + 1)]
+            if target == i:
+                return
+            self.jobs.pop(i)
+            self.jobs.insert(target, job)
+            self._cv.notify_all()
 
     def add(self, jobs: list[Job]) -> list[Job]:
         """Queue ready-made jobs (the sync planner builds them with exact source/target paths)."""
@@ -347,8 +380,9 @@ class TransferEngine:
                 except Exception:
                     pass
 
-    def _conn(self, site, conns: dict[str, Backend]) -> Backend:
-        b = conns.get(site.id)
+    def _conn(self, site, conns: dict[str, Backend], role: str = "") -> Backend:
+        key = site.id + role                  # a relay inside one server needs a second connection
+        b = conns.get(key)
         if b is None or not b.connected:
             if b is not None:
                 try:
@@ -356,7 +390,7 @@ class TransferEngine:
                 except Exception:
                     pass
             b = self.connector(site)
-            conns[site.id] = b
+            conns[key] = b
         return b
 
     def _run(self, job: Job, conns: dict[str, Backend]) -> None:
@@ -365,14 +399,20 @@ class TransferEngine:
             b = None
             try:
                 b = self._conn(job.site, conns)
-                if job.is_dir:
+                if job.kind == "relay":
+                    b2 = self._conn(job.dst_site, conns, "#dst")
+                    if job.is_dir:
+                        self._expand_relay(job, b, b2)
+                    else:
+                        self._relay_file(job, b, b2)
+                elif job.is_dir:
                     self._expand(job, b)
                 elif job.kind == "upload":
                     self._upload_file(job, b)
                 else:
                     self._download_file(job, b)
                 job.error = ""
-                if self.verify and job.status == DONE and not job.is_dir:
+                if self.verify and job.status == DONE and not job.is_dir and job.kind != "relay":
                     self._verify(job, b)
                 return
             except Cancelled:
@@ -386,6 +426,8 @@ class TransferEngine:
                 lost = is_connection_error(e) or (b is not None and not b.connected)
                 if lost:
                     conns.pop(job.site.id, None)
+                    if job.dst_site is not None:
+                        conns.pop(job.dst_site.id + "#dst", None)
                     if job.attempts < self.MAX_ATTEMPTS:
                         job.error = f"{friendly(e)}; retrying…"
                         self._emit(job, force=True)
@@ -425,6 +467,50 @@ class TransferEngine:
         job.status = DONE
         if children:
             self._add(children, after=job)
+
+    # ---- server -> server
+    def _expand_relay(self, job: Job, src: Backend, dst: Backend) -> None:
+        dst.makedirs(job.dst)
+        children = []
+        for e in sorted(src.list(job.src), key=lambda x: (not x.is_dir, x.name.lower())):
+            if e.is_link and e.is_dir:
+                continue
+            children.append(Job("relay", job.site, e.path, dst.join(job.dst, e.name), is_dir=e.is_dir,
+                                size=e.size, mtime=e.mtime, policy=job.policy, dst_site=job.dst_site))
+        job.status = DONE
+        if children:
+            self._add(children, after=job)
+
+    def _relay_file(self, job: Job, src: Backend, dst: Backend) -> None:
+        """Download into a temporary file, then upload it: every backend can read and write a real
+        file (some need its size or to seek in it), which a pipe between the two can't promise."""
+        import tempfile
+        if self._decide(job, job.size, job.mtime, dst.stat(job.dst)) is None:
+            job.status = SKIPPED
+            return
+        job.done = job.resumed_from = 0
+        half = {"phase": 0}
+        down_bucket, up_bucket = self.limits["download"], self.limits["upload"]
+
+        def progress(n: int) -> None:            # the bar covers both halves: down, then up
+            if job.cancel_flag:
+                raise Cancelled()
+            half["phase"] += n
+            job.done = min(job.size, half["phase"] // 2) if job.size else 0
+            (down_bucket if half["phase"] <= job.size else up_bucket).consume(n, lambda: job.cancel_flag)
+            self._emit(job)
+        src.read_ahead = down_bucket.rate == 0
+        with tempfile.TemporaryFile(prefix="blamixfiles-relay-") as tmp:
+            src.download(job.src, tmp, 0, progress)
+            tmp.seek(0)
+            dst.upload(tmp, job.dst, 0, progress)
+        if self.preserve_mtime and dst.caps.set_mtime and job.mtime:
+            try:
+                dst.set_mtime(job.dst, job.mtime)
+            except Exception:
+                pass
+        job.done = job.size
+        job.status = DONE
 
     # ---- overwrite policy: returns start offset, or None to skip
     def _decide(self, job: Job, src_size: int, src_mtime: float, dst: Entry | None) -> int | None:

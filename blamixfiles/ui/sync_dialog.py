@@ -117,6 +117,10 @@ class SyncDialog(QDialog):
         self.summary.setObjectName("Muted")
         self.summary.setWordWrap(True)
         bottom.addWidget(self.summary, 1)
+        self.hooks_btn = QPushButton(icon("bolt"), " After sync…")
+        self.hooks_btn.setToolTip("Run a command or call a webhook when the transfers are done")
+        self.hooks_btn.clicked.connect(self.edit_hooks)
+        bottom.addWidget(self.hooks_btn)
         self.save_btn = QPushButton(icon("star"), " Save as profile")
         self.save_btn.clicked.connect(self.save_profile)
         bottom.addWidget(self.save_btn)
@@ -129,6 +133,9 @@ class SyncDialog(QDialog):
         bottom.addWidget(self.apply_btn)
         lay.addLayout(bottom)
         self.profile_name = profile.name if profile else ""
+        self.after_command = profile.after_command if profile else ""
+        self.webhook_url = profile.webhook_url if profile else ""
+        self._hooks_label()
         if auto_compare:
             self.run_compare()
 
@@ -271,14 +278,39 @@ class SyncDialog(QDialog):
         site = self.site
 
         def run(b):
-            return len(S.apply(p, site, self.win.engine, b, LocalBackend()))
+            return S.apply(p, site, self.win.engine, b, LocalBackend())
         self.tab.remote_session.run(run, self._applied, self._failed)
 
-    def _applied(self, n: int) -> None:
+    def _applied(self, jobs) -> None:
+        n = len(jobs)
         self.win.show_message(f"Sync: {n} transfer(s) queued" if n else "Sync: done", False)
+        if n and (self.after_command.strip() or self.webhook_url.strip()):
+            name = self.profile_name or f"{self.site.label} sync"
+            info = {"site": self.site.label, "local": self.local_dir.text().strip(),
+                    "remote": self.remote_dir.text().strip()}
+            self.win.after_transfers(self.site, jobs, name, self.after_command, self.webhook_url, info)
         self.tab.local.refresh()
         self.tab.remote.refresh()
         self.accept()
+
+    # ------------------------------------------------------------ hooks
+    def _hooks_label(self) -> None:
+        on = bool(self.after_command.strip() or self.webhook_url.strip())
+        self.hooks_btn.setText(" After sync ✓" if on else " After sync…")
+
+    def edit_hooks(self) -> None:
+        from .tools import HooksDialog
+        dlg = HooksDialog(self.after_command, self.webhook_url, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.after_command = dlg.command.text().strip()
+        self.webhook_url = dlg.webhook.text().strip()
+        self._hooks_label()
+        if self.profile_name:                      # an existing profile keeps the change right away
+            prof = self.win.store.find_profile(self.profile_name)
+            if prof is not None:
+                prof = dict(prof, after_command=self.after_command, webhook_url=self.webhook_url)
+                self.win.store.save_profile(prof)
 
     # ------------------------------------------------------------ profiles
     def save_profile(self) -> None:
@@ -292,7 +324,8 @@ class SyncDialog(QDialog):
         if not (ok and name):
             return
         prof = S.SyncProfile(name, self.site.id, self.local_dir.text().strip(),
-                             self.remote_dir.text().strip(), self.options())
+                             self.remote_dir.text().strip(), self.options(),
+                             after_command=self.after_command, webhook_url=self.webhook_url)
         self.win.store.save_profile(prof.to_dict())
         self.profile_name = name
         self.win.reload_profiles()

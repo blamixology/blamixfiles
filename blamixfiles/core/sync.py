@@ -290,6 +290,8 @@ class SyncProfile:
     local_dir: str
     remote_dir: str
     options: SyncOptions = field(default_factory=SyncOptions)
+    after_command: str = ""          # run after the sync (a shell command line); see run_hooks()
+    webhook_url: str = ""            # POSTed a JSON summary after the sync
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -297,4 +299,40 @@ class SyncProfile:
     @classmethod
     def from_dict(cls, d: dict) -> "SyncProfile":
         return cls(name=d["name"], site_id=d["site_id"], local_dir=d["local_dir"],
-                   remote_dir=d["remote_dir"], options=SyncOptions.from_dict(d.get("options", {})))
+                   remote_dir=d["remote_dir"], options=SyncOptions.from_dict(d.get("options", {})),
+                   after_command=d.get("after_command", ""), webhook_url=d.get("webhook_url", ""))
+
+
+# ------------------------------------------------------------------ after a sync
+def run_hooks(name: str, after_command: str, webhook_url: str, result: dict, timeout: float = 600) -> list[str]:
+    """Run a profile's hooks once its transfers are finished. `result` is
+    {"status": "ok"|"failed", "files": n, "bytes": n, "failed": n, "site": label, "local": dir, "remote": dir}.
+
+    The command runs through the system shell with the result in the environment
+    (BLAMIXFILES_PROFILE, _STATUS, _FILES, _BYTES, _FAILED, _SITE, _LOCAL, _REMOTE), the webhook gets
+    the same as JSON. Returns one line per hook, saying how it went (for the log / the status bar)."""
+    import os
+    import subprocess
+    notes = []
+    env = dict(os.environ)
+    env.update({f"BLAMIXFILES_{k.upper()}": str(v) for k, v in result.items()})
+    env["BLAMIXFILES_PROFILE"] = name
+    if after_command.strip():
+        try:
+            r = subprocess.run(after_command, shell=True, env=env, capture_output=True, text=True,  # noqa: S602
+                               timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            out = (r.stdout.strip() or r.stderr.strip()).splitlines()
+            notes.append(f"after-sync command exited with {r.returncode}" + (f": {out[-1][:200]}" if out else ""))
+        except subprocess.TimeoutExpired:
+            notes.append(f"after-sync command was stopped after {int(timeout)} s")
+        except OSError as e:
+            notes.append(f"after-sync command could not start: {e}")
+    if webhook_url.strip():
+        try:
+            import httpx
+            r = httpx.post(webhook_url.strip(), json={"profile": name, **result}, timeout=15,
+                           headers={"User-Agent": "BlamixFiles"})
+            notes.append(f"webhook answered {r.status_code}")
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"webhook failed: {e}")
+    return notes

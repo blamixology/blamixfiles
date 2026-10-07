@@ -507,3 +507,132 @@ def test_f6_switches_between_the_two_lists(app, tmp_path):
         win.engine.cancel()
         tab.close()
         win.engine.shutdown()
+
+
+# ------------------------------------------------------------------ 1.1 tools
+def test_tools_search_size_rename_compare_relay(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    from blamixfiles.ui import editor as ED
+    from blamixfiles.ui import tools as TL
+    from blamixfiles.ui.main_window import MainWindow
+    srv_root, loc = tmp_path / "srv", tmp_path / "loc"
+    (srv_root / "pics").mkdir(parents=True)
+    for i in range(3):
+        (srv_root / "pics" / f"IMG_{i}.jpg").write_bytes(b"x" * (1000 * (i + 1)))
+    (srv_root / "notes.txt").write_text("one\ntwo\n")
+    loc.mkdir()
+    (loc / "notes.txt").write_text("one\nTWO\n")
+    with FTPTestServer(srv_root) as srv:
+        store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+        site = Site(name="ftp", protocol="ftp", host="127.0.0.1", port=srv.port, username=USER, password=PASSWORD,
+                    local_dir=str(loc))
+        store.upsert(site)
+        win = MainWindow(store, Settings())
+        win.engine.policy = "overwrite"
+        win.show()
+        win.open_site(store.sites[site.id])
+        tab = win.site_tabs()[0]
+        try:
+            assert wait(app, lambda: tab.remote.path == "/" and any(e.name == "pics" for e in tab.remote.entries))
+            assert wait(app, lambda: tab.local.path == str(loc) and tab.local.entries)
+
+            # search the server
+            dlg = TL.SearchDialog(tab.remote, win)
+            dlg.name.setText("*.jpg")
+            dlg.larger.setText("1.5k")
+            dlg.start()
+            assert wait(app, lambda: not dlg._running)
+            found = sorted(dlg.results.topLevelItem(i).text(0) for i in range(dlg.results.topLevelItemCount()))
+            assert found == ["/pics/IMG_1.jpg", "/pics/IMG_2.jpg"], found
+            dlg.larger.setText("lots")
+            dlg.start()
+            assert "Not a size" in dlg.status.text()
+            dlg.reject()
+
+            # folder size, shown in the list
+            pics = next(e for e in tab.remote.entries if e.name == "pics")
+            tab.remote.calculate_size(pics)
+            item = lambda: next(tab.remote.tree.topLevelItem(i) for i in range(tab.remote.tree.topLevelItemCount())  # noqa: E731
+                                if getattr(tab.remote.tree.topLevelItem(i), "entry", None) is not None
+                                and tab.remote.tree.topLevelItem(i).entry.name == "pics")
+            assert wait(app, lambda: item().text(1) not in ("", None))
+            assert "6000" in item().toolTip(1) or "5.9" in item().text(1)
+
+            # compare notes.txt here and there
+            shown = {}
+            monkeypatch.setattr(ED.DiffDialog, "exec", lambda self: shown.setdefault("text", self.findChildren(
+                __import__("PySide6.QtWidgets", fromlist=["QPlainTextEdit"]).QPlainTextEdit)[0].toPlainText()))
+            notes = next(e for e in tab.local.entries if e.name == "notes.txt")
+            tab.local.compare(notes)
+            assert wait(app, lambda: "text" in shown)
+            assert "-TWO" in shown["text"] and "+two" in shown["text"]
+
+            # copy to "another server" (the same one, another folder)
+            monkeypatch.setattr(TL.RelayDialog, "exec", lambda self: (self.path.setText("/pics"), QDialog.Accepted)[1])
+            remote_notes = next(e for e in tab.remote.entries if e.name == "notes.txt")
+            tab.remote.copy_to_server([remote_notes])
+            assert wait(app, lambda: (srv_root / "pics" / "notes.txt").exists() and not win.engine.pending(), 20)
+
+            # bulk rename in /pics
+            tab.remote.open_dir("/pics")
+            assert wait(app, lambda: tab.remote.path == "/pics" and len(tab.remote.entries) == 4)
+            imgs = [e for e in tab.remote.entries if e.name.startswith("IMG_")]
+            rd = TL.RenameDialog(tab.remote, imgs, win)
+            rd.template.setText("holiday-{n:02}{ext}")
+            assert rd.apply_btn.isEnabled() and "3 will be renamed" in rd.summary.text()
+            rd.apply()
+            assert wait(app, lambda: sorted(p.name for p in (srv_root / "pics").glob("holiday-*")) ==
+                        ["holiday-01.jpg", "holiday-02.jpg", "holiday-03.jpg"])
+        finally:
+            win.engine.cancel()
+            tab.close()
+            win.engine.shutdown()
+
+
+def test_queue_reorder_watch_list_and_diagnostics(app, tmp_path):
+    from blamixfiles.ui.main_window import MainWindow
+    from blamixfiles.ui.tools import DiagnosticsDialog
+    store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+    win = MainWindow(store, Settings())
+    win.engine.set_paused(True)
+    site = Site(name="x")
+    jobs = win.engine.add([E.Job("upload", site, f"/f{i}", f"/r{i}") for i in range(3)])
+    app.processEvents()
+    win.queue._move(jobs[2].id, "top")
+    order = [win.queue.tree.topLevelItem(i).data(0, Qt.UserRole) for i in range(3)]
+    assert order == [jobs[2].id, jobs[0].id, jobs[1].id] and [j.id for j in win.engine.jobs] == order
+    win.engine.cancel()
+
+    d = DiagnosticsDialog({"theme": "Nord"})
+    assert "theme = 'Nord'" in d.view.toPlainText()
+    assert DiagnosticsDialog({}, "Crash:\nboom").view.toPlainText() == "Crash:\nboom"
+    win.engine.shutdown()
+
+
+def test_site_dialog_cloud_and_smb_fields(app):
+    from blamixfiles.ui.dialogs import SiteDialog
+    dlg = SiteDialog(None, [], None)
+    dlg.show()
+    form = dlg.form
+
+    def shown(w) -> bool:
+        return form.isRowVisible(w)
+    dlg.proto.setCurrentIndex(dlg.proto.findData("gdrive"))
+    assert shown(dlg.client_id) and shown(dlg.client_secret) and shown(dlg.signin_widget)
+    assert not shown(dlg.hp_widget) and not shown(dlg.auth)
+    assert "Not signed in" in dlg.signin_state.text()
+    dlg.proto.setCurrentIndex(dlg.proto.findData("dropbox"))
+    assert shown(dlg.client_id) and not shown(dlg.client_secret)
+    dlg.oauth_token = '{"access_token": "a", "refresh_token": "r", "expires_at": 0}'
+    dlg._save()
+    assert dlg.result() and dlg.site.protocol == "dropbox" and dlg.site.auth == "oauth"
+    assert dlg.site.name == "Dropbox" and dlg.site.oauth_token.startswith("{")
+
+    dlg = SiteDialog(None, [], None)
+    dlg.show()
+    dlg.proto.setCurrentIndex(dlg.proto.findData("smb"))
+    assert dlg.form.isRowVisible(dlg.hp_widget) and not dlg.form.isRowVisible(dlg.client_id)
+    assert dlg.form.labelForField(dlg.remote_dir).text() == "Share / folder"
+    assert [dlg.auth.itemData(i) for i in range(dlg.auth.count())] == ["password", "ask"]
+    dlg.close()

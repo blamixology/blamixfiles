@@ -473,7 +473,8 @@ class FindBar(QWidget):
 
 
 class DiffDialog(QDialog):
-    def __init__(self, name: str, mine: str, theirs: str, parent=None):
+    def __init__(self, name: str, mine: str, theirs: str, parent=None,
+                 left: str = "on the server", right: str = "your version"):
         super().__init__(parent)
         self.setWindowTitle(f"Changes: {name}")
         self.resize(900, 600)
@@ -481,7 +482,7 @@ class DiffDialog(QDialog):
         view = QPlainTextEdit(readOnly=True)
         view.setFont(mono_font())
         diff = difflib.unified_diff(theirs.splitlines(), mine.splitlines(),
-                                    "on the server", "your version", lineterm="")
+                                    left, right, lineterm="")
         view.setPlainText("\n".join(diff) or "No differences.")
         Highlighter(view.document(), _diff_lexer()).start()
         lay.addWidget(view)

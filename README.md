@@ -9,7 +9,7 @@
 [![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/blamixology/blamixfiles/releases/latest)
 
 A free, open-source file transfer client: a modern FileZilla alternative.
-SFTP, SCP, FTP/FTPS, WebDAV and S3 in one portable app, a **built-in editor** that saves straight to
+SFTP, SCP, FTP/FTPS, WebDAV, S3, SMB, Google Drive, Dropbox and OneDrive in one portable app, a **built-in editor** that saves straight to
 the server, and an **encrypted password vault**. Windows, macOS and Linux, plus a CLI.
 
 > Sister app to [BlamixShell](https://github.com/blamixology/blamixshell) (SSH client): same vault format,
@@ -35,7 +35,16 @@ code once; transfers reuse that login.
 
 - **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), SCP (for SSH servers without SFTP),
   FTP, FTPS explicit and implicit, WebDAV/WebDAVS (Nextcloud, ownCloud, NAS), S3-compatible storage
-  (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …): all free, no "Pro" tier
+  (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …), SMB (Windows shares, NAS boxes),
+  Google Drive, Dropbox and OneDrive (sign in with the browser): all free, no "Pro" tier
+- **Search a server (Ctrl+Shift+F):** by name (wildcards), size and age, in a folder and everything below it;
+  open the result's folder or download the hits. Right-click a folder → **Calculate size**
+- **Bulk rename:** select several files → *Rename several…*: find/replace (or regex), change case, number
+  them (`photo-{n:03}{ext}`), with a preview that flags clashes before anything is renamed
+- **Compare two files:** right-click → *Compare with the other side* shows the differences between the
+  file here and the one on the server (or between two servers)
+- **Server to server:** right-click → *Copy to another server…* (or to another folder on the same one)
+- **Queue order:** right-click a waiting transfer → move it to the top, up, down or to the bottom
 - **Dual-pane browser:** local on the left, server on the right, each with a folder tree; drag & drop
   between panes, from Explorer/Finder, and out to Explorer/Finder/the desktop; filter, sort, rename,
   delete, new folder, permissions (chmod), copy path, folder bookmarks, tabs reopen where you left off
@@ -43,6 +52,12 @@ code once; transfers reuse that login.
   in the folder you're looking at
 - **Checksums:** optionally verify every transfer (SHA-256/MD5 on the server via `sha256sum`, FTP `HASH`,
   or the S3 ETag); sync can compare files by content
+- **Scheduled syncs:** Sync → *Schedule profile* runs a saved profile daily or every few hours with the app
+  closed (Windows Task Scheduler / cron), and *After sync…* runs a command or calls a webhook when it's done
+- **SSH keys:** right-click an SSH site → *Set up key login…* makes an Ed25519 key, puts it on the server
+  (like `ssh-copy-id`) and switches the site to it
+- **Diagnostics:** Help → *Diagnostics…* collects versions, settings (no passwords) and recent transfers for a
+  problem report; after a crash the app offers the crash report next time. Nothing is ever sent by itself
 - **Watch a folder (Ctrl+Shift+W):** save a file locally and it's on the server a second later; new
   folders are created, `.git`/`node_modules`/editor temp files are skipped, half-written files wait
   until they're complete, and local deletes are never pushed. Also `blamixfiles watch ./site web:/var/www`
@@ -94,6 +109,12 @@ blamixfiles mkdir mysite:/var/www/new/deeper                    # with parents
 blamixfiles mv   mysite:/var/www/a.txt /var/www/archive/a.txt   # rename or move on the same server
 blamixfiles rm   -r --yes mysite:/var/www/old                   # folders need -r; scripts need --yes
 blamixfiles log  -n 20                                          # the latest finished transfers
+blamixfiles find mysite:/var/www --name "*.log" --larger 10M    # search (also --newer 7d, --older 30d)
+blamixfiles du   mysite:/var/www                                # folder size
+blamixfiles keygen && blamixfiles copy-id mysite                # make an SSH key, install it on the server
+blamixfiles schedule "Deploy web" --daily 02:30                 # also --every 6, --off, --list
+blamixfiles login "My Drive"                                    # sign in to a Google Drive/Dropbox/OneDrive site
+blamixfiles diagnostics                                         # for a problem report
 blamixfiles get  mysite:/var/log/nginx ./logs
 blamixfiles put  ./dist sftp://deploy@example.com/var/www --if-exists newer
 blamixfiles sync ./dist mysite:/var/www --mirror --dry-run     # preview, then drop --dry-run
@@ -107,6 +128,20 @@ blamixfiles import blamixshell                                  # asks for the B
 
 Saved sites come from the vault (`BLAMIXFILES_VAULT_PASSWORD`, the OS keychain if you enabled it in the app, or a prompt).
 Exit codes: `0` ok, `1` some transfers failed, `2` connection/login problem, `3` usage error.
+
+## Cloud drives (Google Drive, Dropbox, OneDrive)
+
+Add a site, pick the provider and press **Sign in…**: the provider's page opens in your browser, and the
+app gets a token it keeps in the encrypted vault (refreshed automatically). Each provider needs an app
+registration: release builds have one built in when the repository has them as secrets
+(`BLAMIXFILES_GDRIVE_CLIENT_ID` / `_SECRET`, `BLAMIXFILES_DROPBOX_CLIENT_ID`, `BLAMIXFILES_ONEDRIVE_CLIENT_ID`);
+otherwise enter your own in the site (Google Cloud console: OAuth client *Desktop app*; Dropbox app console:
+redirect `http://127.0.0.1:53682/`; Microsoft Entra: public client, redirect `http://localhost`).
+Deleting moves to the provider's trash / recycle bin. Google Docs, Sheets and Slides are listed but can't
+be downloaded as files (export them in Drive).
+
+**SMB:** the share is part of the start folder (`/Public`, `/Media/Films`); user names can be
+`DOMAIN\user` or `user@domain`.
 
 ## Terminal UI
 

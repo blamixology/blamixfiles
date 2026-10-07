@@ -47,8 +47,22 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Tests: real MSI upgrade through the in-app updater's own script, keychain commands, Linux swap script |
 | 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line; the code is ready, commented out: search for `TODO(BlamixShell)`) |
 
+## 1.1
+
+| | Feature |
+|---|---|
+| ✅ | Search a server by name, size and age (Ctrl+Shift+F, `blamixfiles find`); folder sizes (`blamixfiles du`) |
+| ✅ | Bulk rename with a preview (find/replace, regex, case, numbering) |
+| ✅ | Compare two files (here and on the server, or between servers) |
+| ✅ | Server-to-server copy (through a temporary file on this computer) |
+| ✅ | Reorder the transfer queue |
+| ✅ | Scheduled syncs (Task Scheduler / cron, `blamixfiles schedule`) and after-sync commands / webhooks |
+| ✅ | Live list of what a folder watch uploaded |
+| ✅ | SSH key setup: make a key, install it on the server, switch the site to it (`keygen`, `copy-id`) |
+| ✅ | Google Drive, Dropbox, OneDrive (browser sign-in) and SMB shares |
+| ✅ | Diagnostics and crash reports (never sent automatically) |
+
 ## Later / maybe
 
 | | Feature |
 |---|---|
-| 💡 | Google Drive, Dropbox, OneDrive |

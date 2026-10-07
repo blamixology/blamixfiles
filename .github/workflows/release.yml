@@ -29,6 +29,23 @@ jobs:
         with: { python-version: "3.12" }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libgl1 libfontconfig1 libxcb-cursor0
+      - name: Built-in app ids for the cloud drives (only if the repository has them as secrets)
+        env:
+          GDRIVE_ID: ${{ secrets.BLAMIXFILES_GDRIVE_CLIENT_ID }}
+          GDRIVE_SECRET: ${{ secrets.BLAMIXFILES_GDRIVE_CLIENT_SECRET }}
+          DROPBOX_ID: ${{ secrets.BLAMIXFILES_DROPBOX_CLIENT_ID }}
+          ONEDRIVE_ID: ${{ secrets.BLAMIXFILES_ONEDRIVE_CLIENT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          ids = {"gdrive": (os.environ["GDRIVE_ID"], os.environ["GDRIVE_SECRET"]),
+                 "dropbox": (os.environ["DROPBOX_ID"], ""), "onedrive": (os.environ["ONEDRIVE_ID"], "")}
+          ids = {k: v for k, v in ids.items() if v[0]}
+          if ids:
+              with open("blamixfiles/_oauth_ids.py", "w", encoding="utf-8") as f:
+                  f.write("# written by the release workflow\nBUILTIN = " + repr(ids) + "\n")
+          print("built-in cloud app ids:", ", ".join(ids) or "none")
+          PY
       - name: Build (includes a selftest of the built app)
         run: ./dev.sh build
         env: { PYTHON: python }

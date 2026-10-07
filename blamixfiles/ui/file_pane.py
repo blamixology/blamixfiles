@@ -7,7 +7,7 @@ import os
 
 from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDrag, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QHBoxLayout, QHeaderView,
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QSplitter,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -231,7 +231,8 @@ class FilePane(QWidget):
         for key, fn in ((Qt.Key_Backspace, self.go_up), (Qt.Key_F5, self.refresh),
                         (Qt.Key_Delete, self.delete_selected), (Qt.Key_F2, self.rename_selected),
                         (Qt.Key_F4, self._edit_selected),
-                        (QKeySequence("Shift+F4"), self._edit_external_selected)):
+                        (QKeySequence("Shift+F4"), self._edit_external_selected),
+                        (QKeySequence("Ctrl+Shift+F"), self.search)):
             sc = QShortcut(QKeySequence(key), self.tree)
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(fn)
@@ -531,6 +532,64 @@ class FilePane(QWidget):
     #     if err:
     #         self.message.emit(err, True)
 
+    # ------------------------------------------------------------ tools
+    def search(self) -> None:
+        from .tools import SearchDialog
+        if not self.path:
+            return
+        dlg = SearchDialog(self, self.window())
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.show()
+
+    def calculate_size(self, entry) -> None:
+        from .fmt import human_size
+        from .tools import calculate_size
+        self.message.emit(f"Adding up {entry.name} …", False)
+
+        def done(e, usage, text) -> None:
+            self.message.emit(text, usage is None)
+            if usage is None:
+                return
+            for i in range(self.tree.topLevelItemCount()):
+                it = self.tree.topLevelItem(i)
+                if getattr(it, "entry", None) is not None and it.entry.path == e.path:
+                    it.setText(1, human_size(usage.bytes))
+                    it.setToolTip(1, text)
+        calculate_size(self, entry, done)
+
+    def rename_several(self, entries: list) -> None:
+        from .tools import RenameDialog
+        RenameDialog(self, entries, self.window()).exec()
+
+    def compare(self, entry) -> None:
+        """Compare with the file of the same name in the other list's folder, or with the file selected there."""
+        from .tools import compare_files
+        other = self.other
+        pick = [e for e in other.selected() if not e.is_dir]
+        if len(pick) == 1:
+            target = pick[0]
+        else:
+            target = next((e for e in other.entries if e.name == entry.name and not e.is_dir), None)
+        if target is None:
+            self.message.emit(f"Select the file to compare with in the other list (no {entry.name} there).", True)
+            return
+        left, right = (self, other) if self.session.is_local else (other, self)
+        le, re_ = (entry, target) if left is self else (target, entry)
+        compare_files(self.window(), left, le, right, re_)
+
+    def copy_to_server(self, entries: list) -> None:
+        from .tools import RelayDialog
+        win = self.window()
+        dlg = RelayDialog(win, self.session.site, entries, win)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        dst_site, folder = dlg.destination()
+        if dst_site is None:
+            return
+        for e in entries:
+            win.engine.relay(self.session.site, e, dst_site, folder)
+        self.message.emit(f"Copying {len(entries)} item(s) to {dst_site.label}:{folder}", False)
+
     def _menu(self, pos) -> None:
         sel = self.selected()
         m = QMenu(self)
@@ -556,9 +615,18 @@ class FilePane(QWidget):
                 m.addAction(icon("lock"), "Permissions…", self.chmod_selected)
             m.addAction(icon("copy"), "Copy path",
                         lambda: QApplication.clipboard().setText("\n".join(e.path for e in sel)))
+            if len(sel) == 1 and sel[0].is_dir:
+                m.addAction(icon("gauge"), "Calculate size", lambda: self.calculate_size(sel[0]))
+            if len(sel) > 1:
+                m.addAction(icon("edit"), "Rename several…", lambda: self.rename_several(sel))
+            if len(sel) == 1 and not sel[0].is_dir and self.other is not None:
+                m.addAction(icon("split-h"), "Compare with the other side", lambda: self.compare(sel[0]))
+            if remote:
+                m.addAction(icon("server"), "Copy to another server…", lambda: self.copy_to_server(sel))
             m.addSeparator()
             m.addAction(icon("trash", C["danger"]), "Delete", self.delete_selected)
             m.addSeparator()
+        m.addAction(icon("search"), "Search here… (Ctrl+Shift+F)", self.search)
         m.addAction(icon("folder-plus"), "New folder", self.new_folder)
         m.addAction(icon("refresh"), "Refresh", self.refresh)
         site = self.session.site

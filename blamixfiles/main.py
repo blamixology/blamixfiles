@@ -5,7 +5,28 @@ import os
 import sys
 
 
+def _cli_from_app() -> bool:
+    """`BlamixFiles.exe sync "Deploy web" --yes` (a scheduled sync) runs the command line, not the window.
+    The packaged Windows app has no console: its output goes to <data>/cli.log."""
+    from .cli import COMMANDS
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        return False
+    if sys.stdout is None or sys.stderr is None:
+        from .paths import data_dir
+        log = open(data_dir() / "cli.log", "a", encoding="utf-8", buffering=1)  # noqa: SIM115
+        log.write(f"\n--- {' '.join(sys.argv[1:])}\n")
+        sys.stdout = sys.stdout or log
+        sys.stderr = sys.stderr or log
+    from .cli import main as cli_main
+    cli_main(sys.argv[1:])
+    return True
+
+
 def main() -> None:
+    from . import diagnostics
+    diagnostics.install_crash_hook()
+    if _cli_from_app():
+        return
     if sys.platform == "win32":
         try:
             import ctypes
@@ -13,6 +34,7 @@ def main() -> None:
         except Exception:
             pass
 
+    from PySide6.QtCore import QTimer
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication, QDialog
 
@@ -87,6 +109,7 @@ def main() -> None:
     win.show()
     win.restore_tabs()
     win.updates.start()
+    QTimer.singleShot(1500, win.check_crashes)
     _clean_drag_cache()
     sys.exit(app.exec())
 
@@ -133,6 +156,8 @@ def _selftest(app) -> int:
     print("selftest: libraries", flush=True)
     import pygments.lexers  # noqa: F401  (bundled?)
     import httpx  # noqa: F401
+    import smbclient  # noqa: F401  (SMB)
+    from .core.backends import dropbox, gdrive, onedrive, smb  # noqa: F401  (imported lazily by the app)
     import boto3                         # the S3 model must survive packaging/pruning
     boto3.session.Session().client("s3", region_name="us-east-1", aws_access_key_id="x",
                                    aws_secret_access_key="y")

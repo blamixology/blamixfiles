@@ -14,7 +14,7 @@ COLORS = ["", "#ff6b6b", "#ffa94d", "#ffd43b", "#69db7c", "#38d9a9",
 
 URL_SCHEMES = {"sftp": "sftp", "scp": "scp", "ftp": "ftp", "ftps": "ftps",
                "dav": "webdav", "webdav": "webdav", "davs": "webdavs", "webdavs": "webdavs",
-               "ftpes": "ftps", "ftpis": "ftps-implicit", "s3": "s3"}
+               "ftpes": "ftps", "ftpis": "ftps-implicit", "s3": "s3", "smb": "smb"}
 
 
 def _id() -> str:
@@ -48,6 +48,9 @@ class Site:
     parallel: int = 3                 # simultaneous transfers for this site
     limit_up_kb: int = 0              # speed limit for this site in KB/s (0 = none), on top of the global one
     limit_down_kb: int = 0
+    oauth_client_id: str = ""         # cloud drives: the app registration (empty = BLAMIXFILES_<P>_CLIENT_ID)
+    oauth_client_secret: str = ""
+    oauth_token: str = ""             # JSON: access + refresh token (kept in the vault)
     notes: str = ""
     last_connected: float = 0.0
     id: str = field(default_factory=_id)
@@ -62,7 +65,14 @@ class Site:
         return self.name or self.address
 
     @property
+    def is_cloud(self) -> bool:
+        return self.protocol in ("gdrive", "dropbox", "onedrive")
+
+    @property
     def address(self) -> str:
+        if self.is_cloud:
+            from .core.backends import PROTOCOLS
+            return f"{PROTOCOLS[self.protocol]}" + (f" ({self.username})" if self.username else "")
         user = f"{self.username}@" if self.username else ""
         from .core.backends import DEFAULT_PORTS
         port = f":{self.port}" if self.port and self.port != DEFAULT_PORTS.get(self.protocol) else ""
@@ -136,6 +146,17 @@ class Store:
 
     def save(self) -> None:
         self.vault.save(self.to_dict())
+
+    def keep_tokens(self) -> None:
+        """Cloud drives refresh their sign-in now and then: store the new token in the vault."""
+        from .core import oauth
+
+        def saver(site_id: str, token: str) -> None:
+            site = self.sites.get(site_id)
+            if site is not None and site.oauth_token != token:
+                site.oauth_token = token
+                self.save()
+        oauth.TOKEN_SAVER = saver
 
     def upsert(self, site: Site) -> None:
         self.sites[site.id] = site

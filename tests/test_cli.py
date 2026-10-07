@@ -136,3 +136,84 @@ def test_cli_mkdir_mv_rm_and_json(tmp_path, capsys, monkeypatch):
         doc = json.loads(out)
         assert code == 0 and doc["actions"] and doc["result"]["done"] >= 1
         assert (root / "www" / "n.txt").read_text() == "new"
+
+
+def test_cli_find_du_keygen_copy_id_schedule(tmp_path, capsys, monkeypatch):
+    import json
+    root = tmp_path / "srv"
+    (root / "www" / "logs").mkdir(parents=True)
+    (root / "www" / "logs" / "a.log").write_bytes(b"x" * 3000)
+    (root / "www" / "index.html").write_text("hi")
+    with SFTPTestServer(root) as srv:
+        site = Site(name="web", protocol="sftp", host="127.0.0.1", port=srv.port,
+                    username=USER, password=PASSWORD)
+        st = open_or_create(vault_path(), "master", create=True)
+        st.upsert(site)
+        st.save_profile({"name": "Deploy", "site_id": site.id, "local_dir": str(tmp_path), "remote_dir": "/www",
+                         "options": {}})
+        monkeypatch.setenv("BLAMIXFILES_VAULT_PASSWORD", "master")
+        try:
+            ssh.open_client(site)
+        except ssh.UnknownHostKey as e:
+            ssh.trust_host_key(e.host_id, e.key)
+
+        code, out, _ = run(capsys, "find", "web:/www", "--name", "*.log", "--json")
+        assert code == 0 and [h["path"] for h in json.loads(out)] == ["/www/logs/a.log"]
+        assert run(capsys, "find", "web:/www", "--name", "nothing-like-this")[0] == 1
+        assert run(capsys, "find", "web:/www", "--larger", "huge")[0] == 3
+        code, out, _ = run(capsys, "du", "web:/www", "--json")
+        assert code == 0 and json.loads(out) == {"bytes": 3002, "files": 2, "folders": 1, "unreadable": 0}
+
+        key = tmp_path / "id_cli"
+        code, out, _ = run(capsys, "keygen", str(key), "--no-passphrase", "--comment", "cli-test")
+        assert code == 0 and (tmp_path / "id_cli.pub").exists() and "cli-test" in out
+        code, out, _ = run(capsys, "copy-id", "web", "--key", str(key) + ".pub")
+        assert code == 0 and "Added" in out
+        code, out, _ = run(capsys, "copy-id", "web", "--key", str(key) + ".pub")
+        assert code == 0 and "Already there" in out
+
+        from blamixfiles.core import schedule as SC
+        calls = []
+        monkeypatch.setattr(SC, "available", lambda: True)
+        monkeypatch.setattr(SC, "install", lambda name, when: calls.append((name, when)))
+        monkeypatch.setattr(SC, "listing", lambda: {"Deploy": "every day at 02:00"})
+        code, out, err = run(capsys, "schedule", "Deploy", "--daily", "02:00")
+        assert code == 0 and calls[0][0] == "Deploy" and calls[0][1].daily == "02:00" and "keychain" in err
+        assert run(capsys, "schedule", "Nope", "--daily", "02:00")[0] == 3
+        assert run(capsys, "schedule", "Deploy", "--daily", "26:00")[0] == 3
+        code, out, _ = run(capsys, "schedule", "--list")
+        assert code == 0 and "Deploy" in out and "02:00" in out
+
+        code, out, _ = run(capsys, "diagnostics")
+        assert code == 0 and "BlamixFiles" in out and "Python" in out
+
+
+def test_packaged_app_runs_cli_commands(monkeypatch, capsys):
+    """BlamixFiles.exe sync … (a scheduled task) goes to the command line, not the window."""
+    from blamixfiles import cli as C
+    from blamixfiles import main as M
+    seen = []
+    monkeypatch.setattr(C, "main", lambda argv: seen.append(argv))
+    monkeypatch.setattr(M.sys, "argv", ["BlamixFiles.exe", "sync", "Deploy", "--yes"])
+    assert M._cli_from_app() and seen == [["sync", "Deploy", "--yes"]]
+    monkeypatch.setattr(M.sys, "argv", ["BlamixFiles.exe", "C:/some/file.txt"])
+    assert not M._cli_from_app()
+    parser_cmds = set()
+    import argparse
+    orig = argparse.ArgumentParser.parse_args
+
+    def grab(self, args=None, namespace=None):
+        for a in self._actions:
+            if isinstance(a, argparse._SubParsersAction):
+                parser_cmds.update(a.choices)
+        raise SystemExit(0)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", grab)
+    try:
+        C.__dict__["main"]                                      # (patched above)
+        monkeypatch.undo()
+        monkeypatch.setattr(argparse.ArgumentParser, "parse_args", grab)
+        with pytest.raises(SystemExit):
+            C.main(["--version"])
+    finally:
+        monkeypatch.setattr(argparse.ArgumentParser, "parse_args", orig)
+    assert parser_cmds and parser_cmds <= C.COMMANDS, parser_cmds - C.COMMANDS

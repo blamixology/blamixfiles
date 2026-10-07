@@ -3,14 +3,15 @@ transfer queue."""
 from __future__ import annotations
 
 import os
+import threading
 import time
 import webbrowser
 
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
-from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabBar, QTabWidget,
-                               QToolButton, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import __version__, keychain, updater
 from ..core import engine as E
@@ -103,11 +104,27 @@ class SiteTab(QWidget):
         wb.addWidget(dot)
         self.watch_text = QLabel("")
         wb.addWidget(self.watch_text, 1)
+        self.watch_list_btn = QPushButton("Show files", checkable=True)
+        self.watch_list_btn.toggled.connect(lambda on: (self.watch_list.setVisible(on),
+                                                        self.watch_list_btn.setText("Hide files" if on else "Show files")))
+        wb.addWidget(self.watch_list_btn)
         stop = QPushButton("Stop watching")
         stop.clicked.connect(lambda: self.watch_btn.setChecked(False))
         wb.addWidget(stop)
         self.watch_bar.hide()
         lay.addWidget(self.watch_bar)
+        # what the watch uploaded, newest first (live)
+        self.watch_list = QTreeWidget()
+        self.watch_list.setObjectName("Files")
+        self.watch_list.setRootIsDecorated(False)
+        self.watch_list.setHeaderLabels(["Time", "File", "Status"])
+        self.watch_list.setColumnWidth(0, 80)
+        self.watch_list.setColumnWidth(1, 520)
+        self.watch_list.setMaximumHeight(160)
+        self.watch_list.setAccessibleName("Files uploaded by the folder watch")
+        self.watch_list.hide()
+        self.watch_items: dict[int, QTreeWidgetItem] = {}
+        lay.addWidget(self.watch_list)
         lay.addWidget(split, 1)
         lay.addWidget(self.log_view)
 
@@ -182,7 +199,7 @@ class SiteTab(QWidget):
         def changed(rels: list[str]) -> None:
             jobs = W.queue_uploads(engine, site, local, remote, rels, join)
             if jobs:
-                on_ui(lambda: self._watch_update(len(jobs), rels))
+                on_ui(lambda: self._watch_update(len(jobs), rels, jobs))
         self.watcher = W.FolderWatcher(local, changed, on_error=lambda m: self.log(f"watch: {m}", True))
         try:
             self.watcher.start()
@@ -198,13 +215,37 @@ class SiteTab(QWidget):
         self.log(f"Watching {local} → {remote}")
         self.win.tab_watch_changed(self)
 
-    def _watch_update(self, n: int, rels: list[str]) -> None:
+    WATCH_LIST_MAX = 300
+
+    def _watch_update(self, n: int, rels: list[str], jobs: list | None = None) -> None:
+        for j in jobs or []:
+            if j.is_dir:
+                continue
+            it = QTreeWidgetItem([time.strftime("%H:%M:%S"), os.path.relpath(j.src, self.local.path), "queued"])
+            it.setToolTip(1, f"{j.src}  →  {j.dst}")
+            self.watch_list.insertTopLevelItem(0, it)
+            self.watch_items[j.id] = it
+        while self.watch_list.topLevelItemCount() > self.WATCH_LIST_MAX:
+            old = self.watch_list.takeTopLevelItem(self.watch_list.topLevelItemCount() - 1)
+            self.watch_items = {k: v for k, v in self.watch_items.items() if v is not old}
         self.watch_count += n
         last = rels[-1] if rels else ""
         self.watch_text.setText(f"Watching  {self.watch_target}   ·   {self.watch_count} uploaded"
                                 + (f"   ·   last: {last}" if last else ""))
         for r in rels:
             self.log(f"changed: {r}")
+
+    def watch_job_changed(self, job) -> None:
+        it = self.watch_items.get(job.id)
+        if it is None:
+            return
+        text = {E.DONE: "uploaded", E.FAILED: f"failed: {job.error}", E.RUNNING: "uploading …",
+                E.SKIPPED: "skipped", E.CANCELLED: "cancelled"}.get(job.status, job.status)
+        it.setText(2, text)
+        it.setForeground(2, QColor(C["danger"] if job.status == E.FAILED else
+                                   C["ok"] if job.status == E.DONE else C["muted"]))
+        if job.status in (E.DONE, E.FAILED, E.SKIPPED, E.CANCELLED):
+            self.watch_items.pop(job.id, None)
 
     def stop_watch(self) -> None:
         if self.watcher is None:
@@ -300,6 +341,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.settings = settings
+        store.keep_tokens()
         self.keychain_account = ""          # set by main(); empty in tests
         self.setWindowTitle("BlamixFiles")
         self.resize(1320, 820)
@@ -537,6 +579,7 @@ class MainWindow(QMainWindow):
         act(h, "Report a problem", lambda: webbrowser.open(GITHUB + "/issues"), None, "help")
         act(h, "☕ Buy me a coffee", lambda: webbrowser.open(KOFI), None, "coffee")
         act(h, f"Made by {COMPANY}", lambda: webbrowser.open(COMPANY_URL), None, "link")
+        act(h, "Diagnostics…", self.show_diagnostics, None, "help")
         h.addSeparator()
         act(h, "About BlamixFiles", self.about)
 
@@ -561,6 +604,27 @@ class MainWindow(QMainWindow):
         if isinstance(tab, SiteTab):
             on_local = tab.local.isAncestorOf(QApplication.focusWidget() or tab)
             (tab.remote if on_local else tab.local).tree.setFocus()
+
+    def show_diagnostics(self, crash_text: str = "") -> None:
+        from .tools import DiagnosticsDialog
+        DiagnosticsDialog(self.settings.data, crash_text, self).exec()
+
+    def check_crashes(self) -> None:
+        """Offer the newest crash report once, the first time the app starts after a crash."""
+        from .. import diagnostics
+        seen = float(self.settings["crash_seen"] or 0)
+        new = diagnostics.new_crashes(seen)
+        self.settings["crash_seen"] = time.time()
+        self.settings.save()
+        if not new or not seen:                       # (first run ever: nothing to compare against)
+            return
+        box = QMessageBox(QMessageBox.Warning, "BlamixFiles", "BlamixFiles closed unexpectedly last time. "
+                          "Do you want to see the report (to send it with a problem report)?",
+                          QMessageBox.Yes | QMessageBox.No, self)
+        box.button(QMessageBox.Yes).setText("Show the report")
+        box.button(QMessageBox.No).setText("Not now")
+        if box.exec() == QMessageBox.Yes:
+            self.show_diagnostics(new[0].read_text(encoding="utf-8", errors="replace"))
 
     def show_transfer_log(self) -> None:
         from .dialogs import TransferLogDialog
@@ -710,9 +774,64 @@ class MainWindow(QMainWindow):
                 act = m.addAction(icon("star"), label, lambda p=p: self.run_profile(p))
                 act.setEnabled(site is not None)
             m.addSeparator()
+            from ..core import schedule as SC
+            if SC.available():
+                sm = m.addMenu(icon("bolt"), "Schedule profile")
+                planned = SC.listing()
+                for p in profiles:
+                    when = planned.get(p["name"], "")
+                    sm.addAction(p["name"] + (f"   ({when})" if when else ""),
+                                 lambda p=p, when=when: self.schedule_profile(p["name"], when))
             dm = m.addMenu(icon("trash"), "Delete profile")
             for p in profiles:
                 dm.addAction(p["name"], lambda p=p: self._delete_profile(p["name"]))
+
+    def after_transfers(self, site, jobs: list, name: str, command: str, webhook: str, info: dict) -> None:
+        """Run a sync profile's hooks once its transfers (and the files in its folders) are finished."""
+        from ..core import sync as S
+        started = time.time() - 1
+        ids = {j.id for j in jobs}
+        timer = QTimer(self, interval=1000)
+
+        def mine(j) -> bool:
+            return j.id in ids or (j.site.id == site.id and j.kind in ("upload", "download")
+                                   and (j.started or 0) >= started)
+
+        def check() -> None:
+            ours = [j for j in self.engine.jobs if mine(j)]
+            if any(j.status in (E.QUEUED, E.RUNNING) for j in ours):
+                return
+            timer.stop()
+            timer.deleteLater()
+            files = [j for j in ours if not j.is_dir]
+            failed = sum(j.status == E.FAILED for j in files)
+            result = dict(info, status="failed" if failed else "ok", files=sum(j.status == E.DONE for j in files),
+                          bytes=sum(j.size for j in files if j.status == E.DONE), failed=failed)
+
+            def work() -> None:
+                notes = S.run_hooks(name, command, webhook, result)
+                on_ui(lambda: self.show_message(f"After sync “{name}”: " + "; ".join(notes)))
+            threading.Thread(target=work, daemon=True, name="sync-hooks").start()
+        timer.timeout.connect(check)
+        timer.start()
+
+    def schedule_profile(self, name: str, current: str = "") -> None:
+        from ..core import schedule as SC
+        from .tools import ScheduleDialog
+        dlg = ScheduleDialog(self, name, current, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        when = dlg.choice()
+        try:
+            if when is None:
+                SC.remove(name)
+                self.show_message(f"“{name}” no longer runs on a schedule")
+            else:
+                SC.install(name, when)
+                self.show_message(f"“{name}” will sync {when.describe()}")
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Schedule", f"Couldn't set up the schedule:\n{e}")
+        self.reload_profiles()
 
     def _delete_profile(self, name: str) -> None:
         if QMessageBox.question(self, "Delete profile", f"Delete the sync profile “{name}”?") == QMessageBox.Yes:
@@ -784,11 +903,17 @@ class MainWindow(QMainWindow):
             m.addAction(icon("plug"), "Connect", lambda: self.open_site(s))
             m.addAction(icon("edit"), "Edit…", lambda: self.edit_site(s))
             m.addAction(icon("copy"), "Duplicate", lambda: self._duplicate(s))
+            if s.is_ssh:
+                m.addAction(icon("lock"), "Set up key login…", lambda: self.setup_key(s))
             m.addSeparator()
             m.addAction(icon("trash", C["danger"]), "Delete", lambda: self.delete_site(s))
         else:
             m.addAction(icon("plus"), "New site…", self.new_site)
         m.exec(self.site_tree.viewport().mapToGlobal(pos))
+
+    def setup_key(self, site) -> None:
+        from .tools import KeySetupDialog
+        KeySetupDialog(self, site, self).exec()
 
     def new_site(self) -> None:
         dlg = SiteDialog(None, self.store.all_groups(), self, sites=list(self.store.sites.values()))
@@ -1087,6 +1212,9 @@ class MainWindow(QMainWindow):
 
     def _job_changed(self, job: E.Job) -> None:
         self.queue.update_job(job)
+        for t in self.site_tabs():
+            if t.watch_items:
+                t.watch_job_changed(job)
         if job.status != E.DONE:
             return
         # refresh the destination pane if it shows the folder the file/folder landed in

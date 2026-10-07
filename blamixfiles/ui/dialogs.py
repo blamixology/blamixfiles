@@ -436,6 +436,21 @@ class SiteDialog(_Base):
             w.setToolTip("Applies to this server only, on top of the limit in the transfer queue.")
         self.notes = QPlainTextEdit(s.notes)
         self.notes.setFixedHeight(60)
+        # cloud drives: the app registration + the browser sign-in
+        self.client_id = QLineEdit(s.oauth_client_id, placeholderText="empty = the app id built into this release")
+        self.client_id.setToolTip("Only if you registered your own app with the provider (or this copy has none built in)")
+        self.client_secret = QLineEdit(s.oauth_client_secret, echoMode=QLineEdit.Password,
+                                       placeholderText="Google only")
+        self.oauth_token = s.oauth_token
+        self.signin_widget = QWidget()
+        si = QHBoxLayout(self.signin_widget)
+        si.setContentsMargins(0, 0, 0, 0)
+        self.signin_btn = QPushButton(icon("globe"), " Sign in…")
+        self.signin_btn.setToolTip("Opens the provider's sign-in page in your browser")
+        self.signin_btn.clicked.connect(self._sign_in)
+        self.signin_state = QLabel("")
+        si.addWidget(self.signin_btn)
+        si.addWidget(self.signin_state, 1)
 
         form.addRow("Name", self.name)
         form.addRow("Protocol", self.proto)
@@ -443,6 +458,9 @@ class SiteDialog(_Base):
         form.addRow("Region", self.region)
         form.addRow("Jump host", self.jump)
         form.addRow("Username", self.user)
+        form.addRow("App / client id", self.client_id)
+        form.addRow("Client secret", self.client_secret)
+        form.addRow("Account", self.signin_widget)
         form.addRow("Login", self.auth)
         form.addRow("Password", self.password)
         form.addRow("Private key", self.key_row)
@@ -495,14 +513,18 @@ class SiteDialog(_Base):
         ssh_ = proto in ("sftp", "scp")
         s3 = proto == "s3"
         dav = proto in ("webdav", "webdavs")
+        smb = proto == "smb"
+        cloud = proto in ("gdrive", "dropbox", "onedrive")
         cur = keep_auth or self.auth.currentData()
         self.auth.blockSignals(True)
         self.auth.clear()
         if ssh_:
             opts = [("Password", "password"), ("Private key", "key"), ("SSH agent / default keys", "agent"),
                     ("Ask for the password each time", "ask")]
-        elif s3 or dav:
-            opts = [("Keys / password", "password"), ("Ask each time", "ask")]
+        elif s3 or dav or smb:
+            opts = [("Keys / password" if s3 else "Password", "password"), ("Ask each time", "ask")]
+        elif cloud:
+            opts = [("Sign in with the browser", "oauth")]
         else:
             opts = [("Password", "password"), ("Anonymous", "anonymous"), ("Ask for the password each time", "ask")]
         for label, val in opts:
@@ -514,16 +536,29 @@ class SiteDialog(_Base):
         self.form.setRowVisible(self.tz, proto.startswith("ftp"))
         self.form.setRowVisible(self.region, s3)
         self.form.setRowVisible(self.jump, ssh_ and self.jump.count() > 1)
+        for w in (self.client_id, self.signin_widget):
+            self.form.setRowVisible(w, cloud)
+        self.form.setRowVisible(self.client_secret, proto == "gdrive")
+        self.form.setRowVisible(self.hp_widget, not cloud)
+        self.form.setRowVisible(self.auth, not cloud)
+        self._signin_label()
         self._label(self.hp_widget, "Endpoint" if s3 else "Host")
         self._label(self.user, "Access key" if s3 else "Username")
         self._label(self.password, "Secret key" if s3 else ("App password" if dav else "Password"))
-        self._label(self.remote_dir, "Bucket / folder" if s3 else ("WebDAV path" if dav else "Remote folder"))
+        self._label(self.remote_dir, "Bucket / folder" if s3 else ("WebDAV path" if dav else
+                    ("Share / folder" if smb else "Remote folder")))
+        if cloud:
+            self._label(self.user, "Label (optional)")
         self.host.setPlaceholderText(
             "s3.amazonaws.com, s3.eu-central-003.backblazeb2.com, http://minio.lan:9000 …" if s3 else
-            "cloud.example.com" if dav else "example.com or 10.0.0.5")
+            "cloud.example.com" if dav else "nas.local, fileserver or 10.0.0.5" if smb else "example.com or 10.0.0.5")
         self.remote_dir.setPlaceholderText(
             "my-bucket/backups (empty = list all buckets)" if s3 else
-            "Nextcloud: /remote.php/dav/files/USERNAME" if dav else "login folder")
+            "Nextcloud: /remote.php/dav/files/USERNAME" if dav else
+            "/Public or /Share/folder (the share is required)" if smb else
+            "/ (the whole drive) or /Folder" if cloud else "login folder")
+        if smb:
+            self.user.setPlaceholderText("user, DOMAIN\\user or user@domain")
         self._auth_changed()
 
     def _auth_changed(self, *_a) -> None:
@@ -532,6 +567,45 @@ class SiteDialog(_Base):
         self.form.setRowVisible(self.key_row, a == "key")
         self.form.setRowVisible(self.passphrase, a == "key")
         self.form.setRowVisible(self.user, a != "anonymous")
+
+    # ---- cloud sign-in
+    def _signin_label(self) -> None:
+        if self.oauth_token:
+            self.signin_state.setText(f"<span style='color:{C['ok']}'>Signed in</span>")
+        else:
+            self.signin_state.setText(f"<span style='color:{C['muted']}'>Not signed in yet</span>")
+
+    def _sign_in(self) -> None:
+        import json
+        import threading
+
+        from ..core import oauth
+        from .bridge import on_ui
+        proto = self.proto.currentData()
+        probe = self._collect()
+        try:
+            cid, secret = oauth.client_for(probe)
+        except oauth.OAuthError as e:
+            QMessageBox.warning(self, "Sign in", str(e))
+            return
+        self.signin_btn.setEnabled(False)
+        self.signin_state.setText("Waiting for the browser … (finish signing in there)")
+
+        def work() -> None:
+            try:
+                token = oauth.authorize(proto, cid, secret)
+                on_ui(lambda: self._signed_in(json.dumps(token), ""))
+            except oauth.OAuthError as e:
+                on_ui(lambda m=str(e): self._signed_in("", m))
+        threading.Thread(target=work, daemon=True, name="oauth").start()
+
+    def _signed_in(self, token: str, err: str) -> None:
+        self.signin_btn.setEnabled(True)
+        if token:
+            self.oauth_token = token
+            self._signin_label()
+        else:
+            self.signin_state.setText(f"<span style='color:{C['danger']}'>{err}</span>")
 
     def _browse_key(self) -> None:
         import os
@@ -562,6 +636,11 @@ class SiteDialog(_Base):
         s.parallel = self.parallel.value()
         s.limit_up_kb = self.limit_up.value()
         s.limit_down_kb = self.limit_down.value()
+        s.oauth_client_id = self.client_id.text().strip()
+        s.oauth_client_secret = self.client_secret.text().strip()
+        s.oauth_token = self.oauth_token
+        if s.is_cloud:
+            s.auth = "oauth"
         s.notes = self.notes.toPlainText()
         return s
 
@@ -573,9 +652,11 @@ class SiteDialog(_Base):
 
     def _save(self) -> None:
         s = self._collect()
-        if not s.host:
+        if not s.host and not s.is_cloud:
             self.test_msg.setText("Enter a host name.")
             return
+        if s.is_cloud and not s.name:
+            s.name = PROTOCOLS[s.protocol]
         self.site = s
         self.accept()
 
