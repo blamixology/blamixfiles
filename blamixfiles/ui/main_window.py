@@ -905,11 +905,19 @@ class MainWindow(QMainWindow):
             m.addAction(icon("copy"), "Duplicate", lambda: self._duplicate(s))
             if s.is_ssh:
                 m.addAction(icon("lock"), "Set up key login…", lambda: self.setup_key(s))
+                from .terminal import find_blamixshell
+                if find_blamixshell(self.settings["blamixshell_path"]):
+                    m.addAction(icon("terminal"), "Open in BlamixShell", lambda: self.open_in_blamixshell(s))
             m.addSeparator()
             m.addAction(icon("trash", C["danger"]), "Delete", lambda: self.delete_site(s))
         else:
             m.addAction(icon("plus"), "New site…", self.new_site)
         m.exec(self.site_tree.viewport().mapToGlobal(pos))
+
+    def open_in_blamixshell(self, site) -> None:
+        from .terminal import open_in_blamixshell
+        err = open_in_blamixshell(site, lambda sid: self.store.sites.get(sid), self.settings["blamixshell_path"])
+        self.show_message(err or f"Opening {site.label} in BlamixShell …", bool(err))
 
     def setup_key(self, site) -> None:
         from .tools import KeySetupDialog

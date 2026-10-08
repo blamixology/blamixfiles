@@ -45,7 +45,7 @@ Legend: ✅ done · 🚧 in progress · 🗓 planned · 💡 later / maybe
 | ✅ | Speed limits per site; a transfer log (View → Transfer log…, `blamixfiles log`) |
 | ✅ | Accessibility: named controls for screen readers, F6 between the two lists |
 | ✅ | Tests: real MSI upgrade through the in-app updater's own script, keychain commands, Linux swap script |
-| 🗓 | "Open in BlamixShell" (needs BlamixShell to accept a site on its command line; the code is ready, commented out: search for `TODO(BlamixShell)`) |
+| ✅ | "Open in BlamixShell": right-click an SSH site or the server list (needs BlamixShell 1.17+) |
 
 ## 1.1
 

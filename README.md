@@ -54,6 +54,8 @@ code once; transfers reuse that login.
   or the S3 ETag); sync can compare files by content
 - **Scheduled syncs:** Sync → *Schedule profile* runs a saved profile daily or every few hours with the app
   closed (Windows Task Scheduler / cron), and *After sync…* runs a command or calls a webhook when it's done
+- **Open in BlamixShell:** right-click an SSH site (in the site list or the server's file list) to get a terminal
+  for it in [BlamixShell](https://github.com/blamixology/blamixshell) 1.17+ (its saved server is reused)
 - **SSH keys:** right-click an SSH site → *Set up key login…* makes an Ed25519 key, puts it on the server
   (like `ssh-copy-id`) and switches the site to it
 - **Diagnostics:** Help → *Diagnostics…* collects versions, settings (no passwords) and recent transfers for a

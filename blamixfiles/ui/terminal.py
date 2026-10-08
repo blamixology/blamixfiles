@@ -62,35 +62,75 @@ def open_terminal(site, path: str, resolve) -> str:
     return ""
 
 
-# TODO(BlamixShell): uncomment (and adjust the flags) once BlamixShell accepts a site on its
-# command line. Proposed contract, matching the vault entry BlamixFiles imports:
-#     blamixshell --site "<site label or id>" [--cd "<remote folder>"]
-# BlamixShell resolves the site from its own vault, so no credentials pass through here.
-#
-# def blamixshell_executable() -> str | None:
-#     """BlamixShell on PATH, or in its usual per-OS install location."""
-#     exe = shutil.which("blamixshell")
-#     if exe:
-#         return exe
-#     candidates = []
-#     if sys.platform == "win32":
-#         base = os.environ.get("LOCALAPPDATA", "")
-#         candidates = [os.path.join(base, "Programs", "BlamixShell", "BlamixShell.exe")]
-#     elif sys.platform == "darwin":
-#         candidates = ["/Applications/BlamixShell.app/Contents/MacOS/BlamixShell"]
-#     return next((c for c in candidates if os.path.isfile(c)), None)
-#
-#
-# def open_in_blamixshell(site, path: str = "") -> str:
-#     """Start BlamixShell on this site. Returns '' or an error message."""
-#     exe = blamixshell_executable()
-#     if exe is None:
-#         return "BlamixShell isn't installed (or not on your PATH)."
-#     cmd = [exe, "--site", site.label]
-#     if path:
-#         cmd += ["--cd", path]
-#     try:
-#         subprocess.Popen(cmd)
-#     except OSError as e:
-#         return str(e)
-#     return ""
+# ---------------------------------------------------------------- Open in BlamixShell
+# BlamixShell (the sister SSH client) opens a server from its command line and hands it to the window
+# that is already open:  BlamixShell --connect <name|user@host:port> [--key FILE] [--jump SERVER]
+# A saved BlamixShell server with that address is reused (its own login); a new address opens its New
+# server form filled in. No password ever goes on the command line.
+
+def _blamixshell_candidates() -> list[str]:
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        roots = [os.path.join(local, "Programs"), os.environ.get("ProgramFiles", ""),
+                 os.environ.get("ProgramFiles(x86)", "")]
+        return [os.path.join(r, "BlamixShell", "BlamixShell.exe") for r in roots if r]
+    if sys.platform == "darwin":
+        return ["/Applications/BlamixShell.app/Contents/MacOS/BlamixShell",
+                os.path.expanduser("~/Applications/BlamixShell.app/Contents/MacOS/BlamixShell")]
+    return [os.path.expanduser("~/Applications/BlamixShell/BlamixShell"), "/opt/BlamixShell/BlamixShell"]
+
+
+def find_blamixshell(configured: str = "") -> list[str] | None:
+    """The command that starts BlamixShell's window, or None when it isn't installed.
+    The packaged app takes --connect directly; the pip-installed `blamixshell` needs `gui` first."""
+    if configured and os.path.exists(configured):
+        app = configured
+        if app.endswith(".app"):
+            app = os.path.join(app, "Contents", "MacOS", "BlamixShell")
+        stem = os.path.splitext(os.path.basename(app))[0]
+        return [app, "gui"] if stem == "blamixshell" else [app]     # lower case = the pip command line
+    for c in _blamixshell_candidates():
+        if os.path.isfile(c):
+            return [c]
+    for name in ("BlamixShell",):                 # packaged app on PATH
+        exe = shutil.which(name)
+        if exe and os.path.basename(exe).startswith("BlamixShell"):
+            return [exe]
+    exe = shutil.which("blamixshell")             # pip / pipx install: the CLI, its GUI is a sub-command
+    if exe:
+        return [exe, "gui"]
+    return None
+
+
+def blamixshell_target(site, resolve) -> list[str]:
+    """--connect / --key / --jump for a site (addresses, so BlamixShell can match its saved servers)."""
+    def addr(s) -> str:
+        host = f"[{s.host}]" if ":" in s.host else s.host
+        port = f":{s.effective_port}" if s.effective_port != 22 else ""
+        return (f"{s.username}@" if s.username else "") + host + port
+    args = ["--connect", addr(site)]
+    if site.auth == "key" and site.key_path:
+        args += ["--key", os.path.expanduser(site.key_path)]
+    jump = resolve(site.jump_id) if getattr(site, "jump_id", "") else None
+    if jump is not None:
+        args += ["--jump", addr(jump)]
+    return args
+
+
+def open_in_blamixshell(site, resolve, configured: str = "") -> str:
+    """Start (or hand off to) BlamixShell for this site. Returns '' or an error message."""
+    cmd = find_blamixshell(configured)
+    if cmd is None:
+        return "BlamixShell isn't installed (https://github.com/blamixology/blamixshell)."
+    try:
+        kw = {}
+        if sys.platform == "win32":
+            kw["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x8) | \
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen([*cmd, *blamixshell_target(site, resolve)], close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+    except OSError as e:
+        return f"Could not start BlamixShell: {e}"
+    return ""

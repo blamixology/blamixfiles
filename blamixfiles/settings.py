@@ -24,6 +24,7 @@ DEFAULTS = {
     "last_update_check": 0,
     "skip_version": "",        # "Skip this version" in the update dialog
     "crash_seen": 0,           # newest crash report already offered (time)
+    "blamixshell_path": "",    # "" = find BlamixShell where it's usually installed
     "external_editor": "",     # program for "Edit in another app" ("" = the system default app)
 }
 

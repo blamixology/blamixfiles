@@ -93,3 +93,4 @@ updater's own script, keychain commands, Linux swap script).
 server-to-server copy; reorder the queue; scheduled syncs with after-sync commands and webhooks; a live list for
 folder watches; SSH key setup (also `keygen` / `copy-id`); diagnostics and crash reports. New CLI commands:
 `find`, `du`, `keygen`, `copy-id`, `schedule`, `login`, `diagnostics`.
+"Open in BlamixShell" for SSH sites (site list and server list right-click; needs BlamixShell 1.17 or newer).
