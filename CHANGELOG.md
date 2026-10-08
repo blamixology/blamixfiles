@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-10-08
+
+- Tests: shut Qt down in order at the end of the run (Linux segfault at exit after all tests passed) (4eef590)
+- Open in BlamixShell (BlamixShell --connect user@host:port [--key] [--jump], needs BlamixShell 1.17+) (d9c7a9d)
+
 ## 1.1.0 - 2026-10-08
 
 - 1.1: cloud drives (Google Drive, Dropbox, OneDrive) and SMB; server search, folder sizes, bulk rename, file compare, server-to-server copy, queue order, scheduled syncs with hooks, watch list, SSH key setup, diagnostics (8dc9f8a)
