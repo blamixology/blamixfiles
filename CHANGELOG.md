@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-10-09
+
+- Editor: Markdown as text, side by side, or the formatted page (from BlamixShell); screenshot (b5f12d9)
+- Fix: 'Do this for all remaining files' kept asking (parallel workers each asked); the answer now lasts for the batch only (ee1af43)
+- README: all features grouped by task, install table, screenshot gallery; ./dev.sh screenshots (27b64cb)
+
 ## 1.1.1 - 2026-10-08
 
 - Tests: shut Qt down in order at the end of the run (Linux segfault at exit after all tests passed) (4eef590)
