@@ -8,99 +8,146 @@
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/blamixology/blamixfiles/releases/latest)
 
-A free, open-source file transfer client: a modern FileZilla alternative.
-SFTP, SCP, FTP/FTPS, WebDAV, S3, SMB, Google Drive, Dropbox and OneDrive in one portable app, a **built-in editor** that saves straight to
-the server, and an **encrypted password vault**. Windows, macOS and Linux, plus a CLI.
+A free, open-source file transfer client: a modern FileZilla alternative. **SFTP, SCP, FTP/FTPS, WebDAV,
+S3, SMB, Google Drive, Dropbox and OneDrive** in one portable app, with a **built-in editor** that saves
+straight to the server, **compare & sync** with a preview of every change, and an **encrypted password
+vault**. Windows, macOS and Linux, plus a command line and a terminal UI.
+
+![BlamixFiles: this computer on the left, the server on the right, the transfer queue below](docs/screenshots/main.png)
 
 > Sister app to [BlamixShell](https://github.com/blamixology/blamixshell) (SSH client): same vault format,
-> same themes, same look.
+> same themes, same look, and *Open in BlamixShell* from any SSH site.
+
+**Contents:** [Install](#install) · [Screenshots](#screenshots) · [Features](#features) ·
+[Command line](#command-line) · [Cloud drives](#cloud-drives-google-drive-dropbox-onedrive) ·
+[Terminal UI](#terminal-ui) · [Development](#development)
+
+## Install
+
+Download from the [latest release](https://github.com/blamixology/blamixfiles/releases/latest):
+
+| System | File |
+|---|---|
+| Windows (installer) | `BlamixFiles-x.y.z-x64.msi`: for all users or just you; updates itself |
+| Windows (portable) | `BlamixFiles-windows-x64.zip`: unzip anywhere, run `BlamixFiles.exe`; your data stays in `data\` next to it |
+| macOS (Apple Silicon / Intel) | `BlamixFiles-macos-arm64.zip` / `BlamixFiles-macos-x64.zip` |
+| Linux | `BlamixFiles-linux-x64.tar.gz` |
+| Command line / terminal UI only | `pip install blamixfiles` (add `[tui]` for the terminal UI, `[gui]` for the app) |
+
+The apps aren't code-signed yet: on Windows, SmartScreen → *More info → Run anyway*; on macOS, right-click →
+*Open* the first time.
 
 ## Why another FTP client?
 
 | | FileZilla | BlamixFiles |
 |---|---|---|
-| Saved passwords | base64 in `sitemanager.xml` unless you set a master password | Always encrypted (AES-256-GCM, scrypt) |
-| Installer | has shipped bundled offers | Clean portable zip, no bundles, no telemetry |
+| Saved passwords | base64 in `sitemanager.xml` unless you set a master password | Always encrypted (AES-256-GCM, scrypt); can unlock with the OS keychain |
+| Installer | has shipped bundled offers | Clean portable zip or MSI, no bundles, no telemetry |
 | Editing a remote file | download → external editor → confirm re-upload | Opens in a tab with syntax highlighting; **Ctrl+S** saves to the server |
-| Folder sync | highlights differences; no one-click sync | Compare → preview every change → apply; saved sync profiles |
-| S3, WebDAV | paid (FileZilla Pro) | included |
-| Scripting | no scripted transfers | `blamixfiles get/put/ls/mv/rm/mkdir/sync` with saved sites, `--json` output |
+| Folder sync | highlights differences; no one-click sync | Compare → preview every change → apply; saved profiles, schedules, hooks |
+| S3, WebDAV, cloud drives | paid (FileZilla Pro) | included: S3, WebDAV, SMB, Google Drive, Dropbox, OneDrive |
+| Scripting | no scripted transfers | `blamixfiles get/put/ls/find/mv/rm/mkdir/sync` with saved sites, `--json` output |
 
-Also: saves from the editor go to a temp file that is then renamed over the original (no
-half-written configs if the connection drops), keep permissions, line endings and encoding,
-and warn you if someone else changed the file meanwhile. On 2FA SSH servers you enter the
-code once; transfers reuse that login.
+Also: saves from the editor go to a temp file that is then renamed over the original (no half-written
+configs if the connection drops), keep permissions, line endings and encoding, and warn you if someone
+else changed the file meanwhile. On 2FA SSH servers you enter the code once; transfers reuse that login.
 
-## Features (so far)
+## Screenshots
 
-- **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), SCP (for SSH servers without SFTP),
+| | |
+|---|---|
+| ![Built-in editor with syntax highlighting](docs/screenshots/editor.png) **Built-in editor:** edit on the server, Ctrl+S saves | ![Compare & sync preview](docs/screenshots/sync.png) **Compare & sync:** every change listed before anything happens |
+| ![Search a server](docs/screenshots/search.png) **Search a server** by name, size and age | ![Bulk rename preview](docs/screenshots/rename.png) **Bulk rename** with a live preview |
+| ![Command palette](docs/screenshots/palette.png) **Command palette (Ctrl+K):** sites, bookmarks, profiles, actions | ![Light theme](docs/screenshots/light.png) **Themes:** six of them (here Light), switched live |
+| ![Nord theme](docs/screenshots/nord.png) **Nord** | ![Terminal UI](docs/screenshots/tui.svg) **Terminal UI** for servers without a desktop |
+
+## Features
+
+### Connect
+
+- **Protocols:** SFTP (password, keys, SSH agent, keyboard-interactive/2FA), SCP (SSH servers without SFTP),
   FTP, FTPS explicit and implicit, WebDAV/WebDAVS (Nextcloud, ownCloud, NAS), S3-compatible storage
-  (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …), SMB (Windows shares, NAS boxes),
-  Google Drive, Dropbox and OneDrive (sign in with the browser): all free, no "Pro" tier
+  (AWS, Backblaze B2, Cloudflare R2, Wasabi, Hetzner, MinIO, …), **SMB** (Windows shares, NAS boxes),
+  **Google Drive, Dropbox, OneDrive** (sign in with the browser): all free, no "Pro" tier
+- **Site manager:** groups, colors, a **production flag** (red tab, extra confirmation before deleting or
+  uploading), per-site parallel transfers and speed limits, a start folder on both sides
+- **Jump hosts:** reach servers behind a bastion (chains work)
+- **Host keys and certificates:** checked on every connection; unknown or changed ones are shown with their
+  fingerprint and must be accepted (self-signed FTPS/WebDAV certificates can be pinned)
+- **SSH keys:** right-click an SSH site → *Set up key login…* makes an Ed25519 key, puts it on the server
+  (like `ssh-copy-id`) and switches the site to it
+- **Import** from FileZilla, WinSCP (WinSCP.ini or the registry, saved passwords included) and BlamixShell
+- **Terminals:** *Open SSH terminal here* opens a shell in the folder you're looking at; *Open in BlamixShell*
+  hands the site to [BlamixShell](https://github.com/blamixology/blamixshell) 1.17+ (its saved server is reused)
+- **Old FTP servers:** file times from servers that only speak `LIST` are corrected for the server's
+  time zone (detected automatically, or set per site), so sync doesn't re-copy unchanged files
+
+### Browse and organise
+
+- **Dual-pane browser:** this computer on the left, the server on the right, each with a folder tree;
+  drag & drop between panes, from Explorer/Finder, and out to Explorer/Finder/the desktop; filter, sort,
+  rename, delete, new folder, permissions (chmod), copy path; tabs reopen where you left off
 - **Search a server (Ctrl+Shift+F):** by name (wildcards), size and age, in a folder and everything below it;
   open the result's folder or download the hits. Right-click a folder → **Calculate size**
 - **Bulk rename:** select several files → *Rename several…*: find/replace (or regex), change case, number
   them (`photo-{n:03}{ext}`), with a preview that flags clashes before anything is renamed
 - **Compare two files:** right-click → *Compare with the other side* shows the differences between the
-  file here and the one on the server (or between two servers)
+  file here and the one on the server
+- **Bookmarks** for folders you use often, and a **command palette (Ctrl+K)** to jump to any site,
+  bookmark, sync profile or action
+
+### Transfer
+
+- **Transfer queue:** parallel transfers per site, whole folders, resume, retry on dropped connections
+  (never on wrong passwords), cancel, pause, an "if the file exists" policy (ask, overwrite, if newer,
+  resume, skip), timestamps preserved; reorder waiting transfers (move to the top, up, down, bottom);
+  unfinished transfers are offered again after a restart or crash
 - **Server to server:** right-click → *Copy to another server…* (or to another folder on the same one)
-- **Queue order:** right-click a waiting transfer → move it to the top, up, down or to the bottom
-- **Dual-pane browser:** local on the left, server on the right, each with a folder tree; drag & drop
-  between panes, from Explorer/Finder, and out to Explorer/Finder/the desktop; filter, sort, rename,
-  delete, new folder, permissions (chmod), copy path, folder bookmarks, tabs reopen where you left off
-- **Jump hosts:** reach servers behind a bastion (chains work); "Open SSH terminal here" opens a shell
-  in the folder you're looking at
+- **Speed limits** for all transfers and per server, and a plain-text **transfer log**
+  (View → Transfer log…, `blamixfiles log`)
 - **Checksums:** optionally verify every transfer (SHA-256/MD5 on the server via `sha256sum`, FTP `HASH`,
-  or the S3 ETag); sync can compare files by content
-- **Scheduled syncs:** Sync → *Schedule profile* runs a saved profile daily or every few hours with the app
-  closed (Windows Task Scheduler / cron), and *After sync…* runs a command or calls a webhook when it's done
-- **Open in BlamixShell:** right-click an SSH site (in the site list or the server's file list) to get a terminal
-  for it in [BlamixShell](https://github.com/blamixology/blamixshell) 1.17+ (its saved server is reused)
-- **SSH keys:** right-click an SSH site → *Set up key login…* makes an Ed25519 key, puts it on the server
-  (like `ssh-copy-id`) and switches the site to it
-- **Diagnostics:** Help → *Diagnostics…* collects versions, settings (no passwords) and recent transfers for a
-  problem report; after a crash the app offers the crash report next time. Nothing is ever sent by itself
-- **Watch a folder (Ctrl+Shift+W):** save a file locally and it's on the server a second later; new
-  folders are created, `.git`/`node_modules`/editor temp files are skipped, half-written files wait
-  until they're complete, and local deletes are never pushed. Also `blamixfiles watch ./site web:/var/www`
+  or the S3 ETag)
 - **Big files resume:** S3 multipart and Nextcloud chunked uploads pick up where they stopped, even
   after a crash or restart (parts already on the server are checked against your file first)
-- **Command palette (Ctrl+K):** jump to any site, bookmark, sync profile or action
-- **Transfer queue:** parallel transfers per site, folders, resume, retry on dropped connections (never on wrong passwords), cancel/retry, pause, "if the file exists" policy (ask, overwrite, if newer, resume, skip), timestamps preserved, speed limits; unfinished transfers are offered again after a restart or crash
-- **Compare & sync:** pick two folders, see every change before it happens (upload, download,
-  create, delete, conflicts), untick what you don't want, apply. One-way or both ways; mirror
-  mode deletes extras only when you ask for it. Save it as a profile and run it again from the
-  Sync menu or `blamixfiles sync "Deploy web"`
-- **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers, find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
-- **Site manager:** groups, colors, **production flag** (red tab + extra confirmation before deleting)
+
+### Sync and automation
+
+- **Compare & sync:** pick two folders, see every change before it happens (upload, download, create,
+  delete, conflicts), untick what you don't want, apply. One-way or both ways, by time and size, size only
+  or content; mirror mode deletes extras only when you ask for it
+- **Profiles:** save a sync and run it again from the Sync menu or `blamixfiles sync "Deploy web"`
+- **Scheduled syncs:** Sync → *Schedule profile* runs a profile daily or every few hours with the app
+  closed (Windows Task Scheduler / cron); *After sync…* runs a command or calls a webhook when it's done
+- **Watch a folder (Ctrl+Shift+W):** save a file locally and it's on the server a second later, with a live
+  list of what went up; new folders are created, `.git`/`node_modules`/editor temp files are skipped,
+  half-written files wait until they're complete, and local deletes are never pushed
+
+### Edit
+
+- **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers,
+  find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
 - **Edit in another app (Shift+F4):** prefer VS Code or Notepad++? The file opens there, and every save
   is uploaded back (asks first; checks nobody changed the server copy in the meantime)
-- **Import** from FileZilla, WinSCP (WinSCP.ini or the registry, saved passwords included) and
-  BlamixShell (File → Import, or `blamixfiles import filezilla|winscp|blamixshell`)
-- **Old FTP servers:** file times from servers that only speak `LIST` are corrected for the server's
-  time zone (detected automatically, or set per site), so sync doesn't re-copy unchanged files
-- **Speed limits and a log:** a limit for all transfers (queue toolbar) and one per server (site dialog),
-  and a plain-text transfer log (View → Transfer log…, `blamixfiles log`)
+
+### Security and privacy
+
+- **Encrypted vault:** sites, passwords, keys, bookmarks and cloud tokens in one file, AES-256-GCM with a
+  key derived from your master password (scrypt); unlock with **Windows Credential Manager, macOS Keychain
+  or the Linux Secret Service** if you want (File → Unlock with …)
+- **No telemetry.** The only thing it contacts on its own is GitHub Releases, once a day, to check for an
+  update (switch it off in the Help menu, or for everyone with `policy.ini`)
+- **Diagnostics:** Help → *Diagnostics…* collects versions, settings (no passwords) and recent transfers for a
+  problem report; after a crash the app offers the crash report next time. Nothing is ever sent by itself
+
+### Look and feel
+
 - **Themes:** Midnight, Graphite, Nord, Solarized Dark, Light, High contrast, or follow the system; they
-  switch live (View → Theme)
-- **Keychain:** unlock the vault with Windows Credential Manager, macOS Keychain or the Linux Secret Service
-  (File → Unlock with …)
-- **Updates:** a quiet daily check on GitHub Releases and one-click install (Windows installer and portable,
-  Linux and macOS when the app sits in a folder you can write to); "Install update from file…" with a
-  SHA-256 check for computers without internet; admins can switch the check off (`policy.ini`)
+  switch live (View → Theme), and the terminal UI uses the same ones
 - **Keyboard and screen readers:** every control has a name, **F6** switches between the two lists,
   **Ctrl+K** reaches every action
+- **Updates:** one-click install (Windows installer and portable, Linux and macOS when the app sits in a
+  folder you can write to); "Install update from file…" with a SHA-256 check for computers without internet
 - **Portable:** data (vault, known_hosts, settings) lives in `data/` next to the app
-
-## Run from source
-
-```
-git clone https://github.com/blamixology/blamixfiles
-cd blamixfiles
-./dev.sh run        # Git Bash on Windows, macOS, Linux  (or run.bat from cmd)
-```
-
-Needs Python 3.10+. The first run creates `.venv` and installs the requirements.
 
 ## Command line
 
@@ -147,6 +194,8 @@ be downloaded as files (export them in Drive).
 
 ## Terminal UI
 
+![The terminal UI: sites, then this computer and the server side by side](docs/screenshots/tui.svg)
+
 For servers with no desktop (works over SSH): `pip install "blamixfiles[tui]"`, then
 
 ```
@@ -160,6 +209,16 @@ browse this computer on the left and the server on the right. `Tab` switches pan
 (uploaded again on save, with a check that nobody changed it meanwhile), `h` hidden files, `x` cancel
 transfers, `t` retry failed, `Esc` back to the sites. SSH two-factor prompts are asked on screen. Themes are
 the app's (`Ctrl+P` → "Change theme").
+
+## Run from source
+
+```
+git clone https://github.com/blamixology/blamixfiles
+cd blamixfiles
+./dev.sh run        # Git Bash on Windows, macOS, Linux  (or run.bat from cmd)
+```
+
+Needs Python 3.10+. The first run creates `.venv` and installs the requirements.
 
 ## Development
 
@@ -176,6 +235,7 @@ Everything goes through `dev.sh` (Git Bash on Windows, or any bash on macOS/Linu
 | `./dev.sh build` | portable app in `dist/BlamixFiles` + zip, checked with a selftest |
 | `./dev.sh msi --test` | Windows installer (all users or just you), installed/upgraded/removed as a test |
 | `./dev.sh release v0.1.0` | `check`, bump the version, write CHANGELOG from the commits, commit, tag, push (`--dry-run` to preview) |
+| `./dev.sh screenshots` | redraw the README pictures (`docs/screenshots/`) from a demo vault and a local test server |
 | `./dev.sh clean` | remove build output and caches |
 
 The tests start real SFTP (paramiko), FTP/FTPS (pyftpdlib), WebDAV (wsgidav) and S3 (moto)

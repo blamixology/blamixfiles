@@ -452,7 +452,7 @@ class MainWindow(QMainWindow):
         bt = QVBoxLayout()
         bt.setSpacing(0)
         bt.addWidget(QLabel("BlamixFiles", objectName="Brand", toolTip=f"Version {__version__}"))
-        bt.addWidget(QLabel("SFTP · FTP · S3 · WebDAV", objectName="BrandSub", toolTip=f"Version {__version__}"))
+        bt.addWidget(QLabel("SFTP · FTP · S3 · SMB · Cloud", objectName="BrandSub", toolTip=f"Version {__version__}"))
         brand.addLayout(bt, 1)
         sl.addLayout(brand)
         self.search = QLineEdit(placeholderText="Search sites", objectName="Search")

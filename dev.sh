@@ -11,6 +11,7 @@
 #   ./dev.sh msi [--test]       Windows installer from dist/BlamixFiles (needs .NET SDK 8+)
 #   ./dev.sh release v0.1.0     check, bump version, CHANGELOG, commit, tag, push
 #                               (--dry-run to preview, nothing is changed)
+#   ./dev.sh screenshots        redraw the README pictures in docs/screenshots/ (demo data, offscreen)
 #   ./dev.sh clean              remove build output and caches (keeps .venv)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -249,6 +250,12 @@ PY
   ok "Released $tag"
 }
 
+cmd_screenshots() {
+  ensure_venv requirements-dev.txt
+  "$VPY" packaging/screenshots.py "$@"
+  ok "Screenshots in docs/screenshots/"
+}
+
 cmd_clean() {
   rm -rf build dist BlamixFiles.spec .pytest_cache .ruff_cache CHANGELOG.new
   find blamixfiles tests -name __pycache__ -type d -prune -exec rm -rf {} +
@@ -260,7 +267,7 @@ cmd_help() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit 
 cmd="${1:-help}"
 shift || true
 case "$cmd" in
-  setup|run|cli|test|check|ship|build|msi|release|clean|help) "cmd_$cmd" "$@" ;;
+  setup|run|cli|test|check|ship|build|msi|release|screenshots|clean|help) "cmd_$cmd" "$@" ;;
   -h|--help) cmd_help ;;
   *) die "Unknown command '$cmd'. Try: ./dev.sh help" ;;
 esac
