@@ -56,10 +56,11 @@ else changed the file meanwhile. On 2FA SSH servers you enter the code once; tra
 
 | | |
 |---|---|
-| ![Built-in editor with syntax highlighting](docs/screenshots/editor.png) **Built-in editor:** edit on the server, Ctrl+S saves | ![Compare & sync preview](docs/screenshots/sync.png) **Compare & sync:** every change listed before anything happens |
-| ![Search a server](docs/screenshots/search.png) **Search a server** by name, size and age | ![Bulk rename preview](docs/screenshots/rename.png) **Bulk rename** with a live preview |
-| ![Command palette](docs/screenshots/palette.png) **Command palette (Ctrl+K):** sites, bookmarks, profiles, actions | ![Light theme](docs/screenshots/light.png) **Themes:** six of them (here Light), switched live |
-| ![Nord theme](docs/screenshots/nord.png) **Nord** | ![Terminal UI](docs/screenshots/tui.svg) **Terminal UI** for servers without a desktop |
+| ![Built-in editor with syntax highlighting](docs/screenshots/editor.png) **Built-in editor:** edit on the server, Ctrl+S saves | ![A Markdown file next to its formatted page](docs/screenshots/editor-markdown.png) **Markdown:** text, side by side, or only the formatted page |
+| ![Compare & sync preview](docs/screenshots/sync.png) **Compare & sync:** every change listed before anything happens | ![Search a server](docs/screenshots/search.png) **Search a server** by name, size and age |
+| ![Bulk rename preview](docs/screenshots/rename.png) **Bulk rename** with a live preview | ![Command palette](docs/screenshots/palette.png) **Command palette (Ctrl+K):** sites, bookmarks, profiles, actions |
+| ![Light theme](docs/screenshots/light.png) **Themes:** six of them (here Light), switched live | ![Nord theme](docs/screenshots/nord.png) **Nord** |
+| ![Terminal UI](docs/screenshots/tui.svg) **Terminal UI** for servers without a desktop | |
 
 ## Features
 
@@ -126,6 +127,8 @@ else changed the file meanwhile. On 2FA SSH servers you enter the code once; tra
 
 - **Built-in editor:** 500+ languages (Pygments), nginx/Apache/systemd/.env detection, line numbers,
   find/replace (regex), go to line, toggle comment, auto-indent; large files open read-only
+- **Markdown:** `.md` files can be shown as text, side by side with the formatted page (headings, tables,
+  lists, code, links; it follows what you type and where you scroll), or only the formatted page
 - **Edit in another app (Shift+F4):** prefer VS Code or Notepad++? The file opens there, and every save
   is uploaded back (asks first; checks nobody changed the server copy in the meantime)
 

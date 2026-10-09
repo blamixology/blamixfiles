@@ -11,8 +11,9 @@ import re
 from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QKeySequence, QPainter, QShortcut,
                            QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument, QTextFormat)
-from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QPlainTextEdit, QPushButton, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QSplitter, QTextBrowser, QTextEdit, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from ..core.textfile import EDIT_LIMIT, EOL_NAMES, VIEW_LIMIT, NotText, decode, encode
 from ..core.vfs import Entry
@@ -491,6 +492,10 @@ class DiffDialog(QDialog):
         lay.addWidget(close, 0, Qt.AlignRight)
 
 
+def is_markdown(path: str, lexer_name: str = "") -> bool:
+    return path.lower().endswith((".md", ".markdown", ".mdown", ".mkd")) or lexer_name.lower() == "markdown"
+
+
 def _diff_lexer():
     try:
         from pygments.lexers import DiffLexer
@@ -506,12 +511,15 @@ class EditorTab(QWidget):
     open_external = Signal()             # "open this file in another app"
 
     def restyle(self) -> None:
-        """After a theme change: syntax colors, current-line highlight and gutter."""
+        """After a theme change: syntax colors, current-line highlight, gutter, Markdown page."""
         hl = getattr(self, "hl", None)
         if hl is not None:
             hl.restyle()
         self.ed._highlight_line()
         self.ed.viewport().update()
+        self._preview_style()
+        if self.markdown and self.preview.isVisible():
+            self._render()
 
     def __init__(self, session: Session, entry: Entry, parent=None):
         super().__init__(parent)
@@ -536,6 +544,23 @@ class EditorTab(QWidget):
         bl.addWidget(where, 1)
         if session.site is not None and session.site.production:
             bl.addWidget(QLabel("PRODUCTION", objectName="Prod"))
+        # Markdown files: the text, side by side with the formatted page, or only the page
+        self.md_buttons: dict[str, QToolButton] = {}
+        self.md_group = QButtonGroup(self)
+        self.md_group.setExclusive(True)
+        for mode, text, tip in (("text", "Text", "Only the text"),
+                                ("split", "Side by side", "The text and the formatted page next to each other"),
+                                ("preview", "Preview", "Only the formatted page")):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setCheckable(True)
+            b.setAutoRaise(True)
+            b.clicked.connect(lambda _c=False, m=mode: self.set_view(m))
+            self.md_group.addButton(b)
+            self.md_buttons[mode] = b
+            bl.addWidget(b)
+            b.hide()
         self.save_btn = QPushButton(icon("save", C["on_accent"]), " Save", objectName="Primary")
         self.save_btn.clicked.connect(self.save)
         self.save_btn.setEnabled(False)
@@ -554,7 +579,22 @@ class EditorTab(QWidget):
         self.ed = CodeEditor()
         self.ed.setReadOnly(True)
         self.ed.setPlainText("Loading …")
-        lay.addWidget(self.ed, 1)
+        # the formatted page (Qt draws it: headings, tables, lists, code, links), next to the text
+        self.preview = QTextBrowser()
+        self.preview.setOpenExternalLinks(True)
+        self.preview.setAccessibleName("Formatted page")
+        self._preview_style()
+        self.preview.hide()
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.addWidget(self.ed)
+        self.split.addWidget(self.preview)
+        self.split.setChildrenCollapsible(False)
+        lay.addWidget(self.split, 1)
+        self.markdown = False
+        self._render_timer = QTimer(self, singleShot=True, interval=300)
+        self._render_timer.timeout.connect(self._render)
+        self.ed.textChanged.connect(lambda: self.markdown and self.preview.isVisible() and self._render_timer.start())
+        self.ed.verticalScrollBar().valueChanged.connect(self._follow_scroll)
         self.findbar = FindBar(self.ed)
         self.findbar.hide()
         lay.addWidget(self.findbar)
@@ -615,6 +655,9 @@ class EditorTab(QWidget):
         uses_spaces = sum(1 for ln in text.split("\n", 2000)[:2000] if ln.startswith("  "))
         self.ed.indent_unit = "\t" if uses_tabs > uses_spaces else ("  " if self._two_space(text) else "    ")
         self.ed.setPlainText(text)
+        self.markdown = is_markdown(self.path, self.lexer_name)
+        for b in self.md_buttons.values():
+            b.setVisible(self.markdown)
         self.hl = Highlighter(self.ed.document(), lexer)
         self.hl.start()
         read_only = len(data) > EDIT_LIMIT
@@ -625,7 +668,90 @@ class EditorTab(QWidget):
         self._update_status()
         if read_only:
             self.message.emit(f"{self.name} is larger than {human_size(EDIT_LIMIT)}: opened read-only", False)
+        if self.markdown:
+            self.set_view(EditorTab.md_view)
         self.title_changed.emit(self.tab_title())
+
+    # ------------------------------------------------------------ Markdown
+    md_view = "split"                       # the last choice, for the next Markdown file
+
+    def _preview_style(self) -> None:
+        """Link color from the theme (Markdown pages don't use style sheets; code is styled in _style_code)."""
+        from PySide6.QtGui import QPalette
+        pal = self.preview.palette()
+        pal.setColor(QPalette.Link, QColor(C["accent"]))
+        pal.setColor(QPalette.LinkVisited, QColor(C["accent2"]))
+        self.preview.setPalette(pal)
+
+    def _style_code(self) -> None:
+        """Qt's Markdown import marks code as "fixed pitch" and takes the system's fixed font, which can be a
+        small serif: use the editor's font, a little smaller than the text, on a tinted background."""
+        from PySide6.QtGui import QTextBlockFormat
+        from .theme import blend
+        doc = self.preview.document()
+        mono = mono_font()
+        size = self.preview.font().pointSizeF()
+        bg = QColor(blend(C["bg"], C["accent"], 0.10))
+        fmt = QTextCharFormat()
+        fmt.setFontFamilies([mono.family(), "Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono", "monospace"])
+        fmt.setFontFixedPitch(True)
+        if size > 0:
+            fmt.setFontPointSize(size * 0.92)
+        fmt.setBackground(bg)
+        cur = QTextCursor(doc)
+        cur.beginEditBlock()
+        block = doc.begin()
+        while block.isValid():
+            if block.blockFormat().hasProperty(QTextFormat.BlockCodeFence) or \
+                    block.blockFormat().hasProperty(QTextFormat.BlockCodeLanguage):
+                bf = QTextBlockFormat()
+                bf.setBackground(bg)
+                c = QTextCursor(block)
+                c.mergeBlockFormat(bf)
+                c.setPosition(block.position())                      # the whole fenced line is code
+                c.setPosition(block.position() + max(0, block.length() - 1), QTextCursor.KeepAnchor)
+                c.mergeCharFormat(fmt)
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().fontFixedPitch():
+                    cur.setPosition(frag.position())
+                    cur.setPosition(frag.position() + frag.length(), QTextCursor.KeepAnchor)
+                    cur.mergeCharFormat(fmt)
+                it += 1
+            block = block.next()
+        cur.endEditBlock()
+
+    def set_view(self, mode: str) -> None:
+        """text | split | preview (only for Markdown files)."""
+        if not self.markdown:
+            return
+        EditorTab.md_view = mode
+        self.md_buttons[mode].setChecked(True)
+        self.ed.setVisible(mode != "preview")
+        self.preview.setVisible(mode != "text")
+        if mode == "split":
+            w = max(self.split.width(), 2)
+            self.split.setSizes([w // 2, w - w // 2])
+        if mode != "text":
+            self._render()
+        (self.preview if mode == "preview" else self.ed).setFocus()
+
+    def _render(self) -> None:
+        bar = self.preview.verticalScrollBar()
+        keep = bar.value() / bar.maximum() if bar.maximum() else 0.0
+        self.preview.setMarkdown(self.ed.toPlainText())
+        self._style_code()
+        bar.setValue(round(keep * bar.maximum()))
+        self._follow_scroll()
+
+    def _follow_scroll(self, *_a) -> None:
+        """Side by side: the page follows the text's scroll position (in proportion)."""
+        if not (self.markdown and self.preview.isVisible() and self.ed.isVisible()):
+            return
+        src, dst = self.ed.verticalScrollBar(), self.preview.verticalScrollBar()
+        if src.maximum():
+            dst.setValue(round(src.value() / src.maximum() * dst.maximum()))
 
     @staticmethod
     def _two_space(text: str) -> bool:

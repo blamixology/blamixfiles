@@ -636,3 +636,53 @@ def test_site_dialog_cloud_and_smb_fields(app):
     assert dlg.form.labelForField(dlg.remote_dir).text() == "Share / folder"
     assert [dlg.auth.itemData(i) for i in range(dlg.auth.count())] == ["password", "ask"]
     dlg.close()
+
+
+def test_markdown_files_show_text_side_by_side_or_preview(app, tmp_path):
+    from blamixfiles.core.vfs import Entry
+    from blamixfiles.ui.editor import EditorTab, is_markdown
+    from blamixfiles.ui.main_window import MainWindow
+    assert is_markdown("/srv/app/README.md") and is_markdown("notes.MARKDOWN") and not is_markdown("/etc/hosts")
+    root = tmp_path / "srv"
+    root.mkdir()
+    (root / "README.md").write_bytes(b"# Deploy\n\n| step | command |\n|---|---|\n| 1 | `git pull` |\n\n- [x] backup\n")
+    (root / "hosts").write_bytes(b"127.0.0.1 localhost\n")
+    with FTPTestServer(root) as srv:
+        store = Store(Vault.create(tmp_path / "v.bfv", "pw", n_log2=10), {})
+        site = Site(name="ftp", protocol="ftp", host="127.0.0.1", port=srv.port, username=USER, password=PASSWORD,
+                    local_dir=str(tmp_path))
+        store.upsert(site)
+        win = MainWindow(store, Settings())
+        win.resize(1200, 700)
+        win.show()
+        win.open_site(store.sites[site.id])
+        tab = win.site_tabs()[0]
+        try:
+            assert wait(app, lambda: tab.remote.entries)
+            EditorTab.md_view = "split"
+            win.open_editor(tab.remote_session, Entry(name="README.md", path="/README.md", size=80))
+            ed = win.tabs.currentWidget()
+            assert wait(app, lambda: ed.loaded)
+            assert not ed.md_buttons["split"].isHidden() and ed.md_buttons["split"].isChecked()
+            assert not ed.ed.isHidden() and not ed.preview.isHidden()                       # side by side
+            html = ed.preview.toHtml()
+            assert "Deploy" in html and "<table" in html and "git pull" in html            # formatted, not raw
+            ed.set_view("preview")
+            assert ed.ed.isHidden() and not ed.preview.isHidden()
+            ed.set_view("split")
+            ed.ed.selectAll()
+            ed.ed.insertPlainText("# Rollback\n")                                          # follows what you type
+            assert wait(app, lambda: "Rollback" in ed.preview.toPlainText())
+            ed.restyle()                                                                    # a theme change
+            ed.set_view("text")
+            assert ed.preview.isHidden() and not ed.ed.isHidden() and EditorTab.md_view == "text"
+            ed.ed.document().setModified(False)
+            win.open_editor(tab.remote_session, Entry(name="hosts", path="/hosts", size=20))
+            other = win.tabs.currentWidget()
+            assert wait(app, lambda: other.loaded)
+            assert all(b.isHidden() for b in other.md_buttons.values()) and other.preview.isHidden()   # not Markdown
+        finally:
+            EditorTab.md_view = "split"
+            win.engine.cancel()
+            tab.close()
+            win.engine.shutdown()

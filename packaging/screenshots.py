@@ -53,6 +53,37 @@ NGINX = """server {
 """
 
 
+README_DEMO = """# Shop: deploy notes
+
+The shop runs on **nginx + PHP 8.3** behind Cloudflare. Deploys go through the
+*Deploy shop* sync profile (BlamixFiles), never by hand.
+
+## Before a release
+
+- [x] Back up the database (`bin/backup.sh`)
+- [x] Run the tests
+- [ ] Tell support about the maintenance window
+
+## Steps
+
+| Step | Command | Who |
+|---|---|---|
+| 1 | `git pull --ff-only` | anyone |
+| 2 | `composer install --no-dev` | anyone |
+| 3 | Sync *Deploy shop* (mirror off) | release lead |
+| 4 | `sudo systemctl reload php8.3-fpm` | release lead |
+
+## Rollback
+
+```bash
+cd /var/www/shop && git checkout v2.14.1
+sudo systemctl reload php8.3-fpm
+```
+
+> Logs are in `/shop/logs`. Use **Search** (Ctrl+Shift+F) with `*.log` and *changed within 1d*.
+"""
+
+
 def demo_files(local: Path, remote: Path) -> None:
     """A small website project here, and the (slightly older) deployed copy on the 'server'."""
     old = time.time() - 9 * 86400
@@ -66,7 +97,7 @@ def demo_files(local: Path, remote: Path) -> None:
         "config/app.php": "<?php return ['debug' => false];\n",
         "src/Controller/CartController.php": "<?php\nfinal class CartController {}\n" * 20,
         "src/bootstrap.php": "<?php\n// boot\n",
-        "README.md": "# Shop\n",
+        "README.md": README_DEMO,
     }
     for rel, text in files.items():
         (local / "shop" / rel).write_text(text)
@@ -229,6 +260,13 @@ def main() -> None:
               and getattr(win.tabs.currentWidget(), "ed", None) is not None
               and "server_name" in win.tabs.currentWidget().ed.toPlainText())
         save(win, "editor")
+        # a Markdown file, side by side with its formatted page
+        from blamixfiles.ui.editor import EditorTab
+        EditorTab.md_view = "split"
+        win.open_editor(tab.remote_session, Entry(name="README.md", path="/shop/README.md", size=len(README_DEMO)))
+        until(lambda: getattr(win.tabs.currentWidget(), "loaded", False)
+              and "deploy notes" in win.tabs.currentWidget().preview.toPlainText())
+        save(win, "editor-markdown")
         win.tabs.setCurrentWidget(tab)
 
         # compare & sync

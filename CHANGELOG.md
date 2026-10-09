@@ -99,3 +99,4 @@ server-to-server copy; reorder the queue; scheduled syncs with after-sync comman
 folder watches; SSH key setup (also `keygen` / `copy-id`); diagnostics and crash reports. New CLI commands:
 `find`, `du`, `keygen`, `copy-id`, `schedule`, `login`, `diagnostics`.
 "Open in BlamixShell" for SSH sites (site list and server list right-click; needs BlamixShell 1.17 or newer).
+Editor: Markdown files can be shown as text, side by side with the formatted page, or only the page (like BlamixShell).
