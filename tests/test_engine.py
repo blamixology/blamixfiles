@@ -101,6 +101,38 @@ def test_policies(served, tmp_path):
     eng.shutdown()
 
 
+def test_answer_for_all_remaining_files_asks_once(served, tmp_path):
+    """Several workers hit existing files at the same time: one question, and its "all remaining files"
+    answer covers the others (also the ones already waiting); the next batch asks again."""
+    import threading
+    import time as _t
+    site, root = served
+    src = tmp_path / "batch"
+    src.mkdir()
+    for i in range(8):
+        (src / f"f{i}.txt").write_text(f"new {i}")
+        (root / f"f{i}.txt").write_text("old")
+    asked = []
+    lock = threading.Lock()
+
+    def ask(job, existing):
+        with lock:
+            asked.append(job.name)
+        _t.sleep(0.3)                                  # the user takes a moment; the other workers wait
+        return "overwrite-all"
+    eng = E.TransferEngine(lambda s: open_backend(s), workers=4, policy="ask", ask=ask)
+    jobs = [eng.upload(site, str(src / f"f{i}.txt"), "/") for i in range(8)]
+    assert eng.wait(30)
+    assert len(asked) == 1, asked
+    assert all(j.status == E.DONE for j in jobs)
+    assert all((root / f"f{i}.txt").read_text() == f"new {i}" for i in range(8))
+    assert eng.policy == "ask"                        # the queue's own setting didn't change
+    _t.sleep(0.2)
+    j = eng.upload(site, str(src / "f0.txt"), "/")    # a later batch: asked again
+    assert eng.wait(10) and len(asked) == 2 and j.status == E.DONE
+    eng.shutdown()
+
+
 def test_cancel_and_retry(served, tmp_path):
     site, root = served
     big = tmp_path / "huge.bin"

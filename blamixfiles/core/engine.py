@@ -150,6 +150,8 @@ class TransferEngine:
         self.verify = verify          # compare checksums after each file (when the server can)
         self.limits = {"upload": TokenBucket(limit_up), "download": TokenBucket(limit_down)}
         self._site_buckets: dict[tuple[str, str], TokenBucket] = {}
+        self._ask_lock = threading.Lock()
+        self._batch_policy = ""               # an "… for all remaining files" answer (this batch only)
         self.log = TransferLog(log_path) if log_path else None
         self.on_change = on_change or (lambda j: None)
         self.policy = policy
@@ -371,6 +373,8 @@ class TransferEngine:
                         self._running_per_site[job.site.id] -= 1
                         if job.status in FINISHED:
                             job.finished = time.time()
+                        if self._batch_policy and not any(j.status in (QUEUED, RUNNING) for j in self.jobs):
+                            self._batch_policy = ""      # the batch is done: the next one asks again
                         self._emit(job, force=True)
                         self._cv.notify_all()
         finally:
@@ -516,12 +520,18 @@ class TransferEngine:
     def _decide(self, job: Job, src_size: int, src_mtime: float, dst: Entry | None) -> int | None:
         if dst is None:
             return 0
-        policy = job.policy or self.policy
+        policy = job.policy or self._batch_policy or self.policy
         if policy == "ask":
-            policy = self.ask(job, dst) if self.ask else "overwrite"
-            if policy.endswith("-all"):          # "overwrite-all" etc. from the dialog
-                policy = policy[:-4]
-                self.policy = policy
+            # One question at a time: several workers can hit an existing file at once, and an
+            # "all remaining files" answer must cover the ones already waiting to ask.
+            with self._ask_lock:
+                policy = job.policy or self._batch_policy or self.policy
+                if policy == "ask":
+                    policy = self.ask(job, dst) if self.ask else "overwrite"
+                    if policy.endswith("-all"):          # "overwrite-all" etc. from the dialog
+                        policy = policy[:-4]
+                        if policy != "cancel":
+                            self._batch_policy = policy  # until the queue is empty, then it asks again
             if policy == "cancel":
                 raise Cancelled()
         if policy == "skip":
